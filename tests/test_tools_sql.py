@@ -27,14 +27,16 @@ class _Ctx:
 
 
 def _make_pool(rows=(("1", "a"), ("2", "b")), description=(("id",), ("name",))):
-    # 签名对齐 db.ConnectionPool：read_connection/run_write 均为 keyword-only settings/sql
+    # 签名对齐 db.ConnectionPool：read_connection/run_write 均为 keyword-only settings/sql；
+    # cursor 直出并带 close（db._cursor 手动关闭——pyodbc cursor 无上下文管理器）
     cursor = SimpleNamespace(
         description=description,
         rowcount=len(rows),
         execute=lambda q: None,
         fetchmany=lambda n: [list(r) for r in rows][:n],
+        close=lambda: None,
     )
-    conn = SimpleNamespace(cursor=lambda: _Ctx(cursor))
+    conn = SimpleNamespace(cursor=lambda: cursor)
     return SimpleNamespace(
         read_connection=lambda creds, settings: _Ctx(conn),
         run_write=lambda creds, settings, sql: 3,

@@ -73,7 +73,7 @@ GaussDB 507
 
 ## 2. 安装
 
-前置要求：Linux + Python 3.11（生产/云端；官方驱动仅此平台）或任意 Python 3.11+（无官方驱动的开发环境，见 2.4）。
+前置要求：Linux + Python 3.11（生产/云端；官方 psycopg2 驱动仅此平台）、Windows + Python 3.11+（原生运行走 pyodbc 轨，见 2.5）或任意 Python 3.11+（无官方驱动的开发环境，见 2.4）。
 
 ### 2.1 离线交付包安装（推荐，对齐 gaussdb-mcp 形态）
 
@@ -136,6 +136,34 @@ uv sync --group local   # psycopg2-binary 进 [dependency-groups] local，仅本
                          # 驱动仍按 DB-API 2.0 懒加载，代码无需改动
 ```
 
+### 2.5 Windows 原生运行（pyodbc + GaussDB ODBC）
+
+官方 psycopg2 驱动无 Windows 包（§2.3），本服务内置 **pyodbc 双轨**：装好 GaussDB
+ODBC 驱动后即可在 Windows 原生连云上实例（sha256 认证 / SSL / 只读会话 / `?`
+占位符均经真实云实例实测通过）。
+
+前置两步：
+
+1. 安装 [GaussDB ODBC 驱动](https://support.huaweicloud.com/intl/zh-cn/usermanual-gaussdb/gaussdb_01_083.html)：
+   官方发布包内的 `gsqlodbc` 安装器，安装后自动注册为 ODBC 数据源
+   **`GaussDB Unicode`**；
+2. `uv pip install pyodbc`（或 `uv sync --group windows`，对应 pyproject 的
+   `windows` 依赖组，不进主依赖——Linux 生产轨仍是官方 psycopg2）。
+
+**驱动自动选择**：未配置时 **Windows → pyodbc，其他平台 → psycopg2**；环境变量
+`GAUSSDB_DATA_MCP_DRIVER=psycopg2|pyodbc` 可强制指定。ODBC 驱动名默认
+`GaussDB Unicode`，非默认安装名可用 `GAUSSDB_DATA_MCP_ODBC_DRIVER` 覆盖。
+
+对调用方透明的差异（服务内部处理）：pyodbc 参数占位符是 `?`（psycopg2 是
+`%s`）、`statement_timeout` 通过连接后 `SET` 下发（ODBC 无启动参数）——工具行为
+与 Linux 轨完全一致。
+
+**已知问题（已规避）**：Windows 上 GaussDB ODBC DLL 在进程退出的清理阶段触发
+堆损坏（exit code `0xC0000374` / `-1073740940`，驱动已知问题，**不影响运行期
+功能**）。服务在正常退出路径（stdio EOF / HTTP 关停）已内置规避：跳过解释器
+清理直接结束进程（`server.py` 的 `_odbc_exit_guard`）；异常终止路径（如进程被
+强杀）仍可能出现一次退出期崩溃报告，属同一已知问题，无数据风险。
+
 ## 3. 配置
 
 ### 3.0 最小接入（只需要六项）
@@ -182,6 +210,8 @@ HTTP 对外（ECS 部署）额外需要：`tokens.json`（一行令牌表，见 
 | `GAUSSDB_DATA_MCP_STATEMENT_TIMEOUT_MS` | `30000` | 服务端 `statement_timeout`（GaussDB 默认 0 不超时，必须设） |
 | `GAUSSDB_DATA_MCP_POOL_MIN` / `POOL_MAX` | `1` / `8` | 读连接池尺寸（池内空闲 TTL 600s，低于服务端 session_timeout 1800s） |
 | `GAUSSDB_DATA_MCP_APPLICATION_NAME` | `gaussdb_data_mcp` | 连接 `application_name`，便于 `pg_stat_activity` 区分流量 |
+| `GAUSSDB_DATA_MCP_DRIVER` | 平台自动 | 强制指定数据库驱动：`psycopg2` / `pyodbc`（未配置时 Windows → pyodbc，其余 → psycopg2，见 §2.5） |
+| `GAUSSDB_DATA_MCP_ODBC_DRIVER` | `GaussDB Unicode` | pyodbc 轨的 ODBC 驱动注册名（gsqlodbc 安装器的默认注册名） |
 | `GAUSSDB_DATA_MCP_DB_HOST` 等 `DB_*` | 空 | 凭证文件缺省时的环境变量兜底（`DB_PORT` 默认 0 = 必须显式给值） |
 
 `DB_*` 兜底项：`DB_HOST` / `DB_PORT` / `DB_DBNAME` / `DB_USER` / `DB_PASSWORD` /
@@ -523,7 +553,9 @@ docker run -d -p 127.0.0.1:8000:8000 \
 | 认证失败（`GAUSSDB_DATA_MCP_AUTH_FAILED`） | 凭证配错。服务**不重试**（防 10 次锁号 1 天），修复 credentials.json 后下次调用自动恢复 |
 | 连不上库（`GAUSSDB_DATA_MCP_CONNECT_FAILED`） | **5432 陷阱**：GaussDB CN 端口通常是 **8000**，驱动默认 5432 是错的；`port` 必须显式配置（无默认值是刻意的） |
 | 拒连，编码相关报错 | 目标库 `ZHS16GBK` / `GB18030_2022` 编码：官方 Python 驱动 2.9.10 起无法连接，建库须用兼容 PG 的编码（如 UTF8） |
-| `GAUSSDB_DATA_MCP_DRIVER_MISSING` | 未装官方驱动 whl（或装了开源 psycopg2 未清理）；Linux/py3.11 限制与安装步骤见 §2.3 |
+| `GAUSSDB_DATA_MCP_DRIVER_MISSING` | psycopg2 轨：未装官方驱动 whl（或装了开源 psycopg2 未清理），Linux/py3.11 限制与安装步骤见 §2.3；pyodbc 轨：`uv pip install pyodbc` + 安装 GaussDB ODBC 驱动，见 §2.5 |
+| `GAUSSDB_DATA_MCP_DRIVER_INVALID` | `GAUSSDB_DATA_MCP_DRIVER` 只接受 `psycopg2` / `pyodbc` |
+| Windows 退出时崩溃（exit code `0xC0000374`） | GaussDB ODBC DLL 退出清理堆损坏（已知问题，不影响运行期）；正常退出路径已规避（§2.5），强杀进程仍可见一次崩溃报告，无数据风险 |
 | 驱动 import 成功但加载即崩 | `LD_LIBRARY_PATH` 未指向 `.../site-packages/gaussdb_psycopg2.lib`，或缺 `libkeyutils1`/`libsasl2-2`/`libldap-common` |
 | `GAUSSDB_DATA_MCP_INSECURE_PUBLIC` | 公网地址 + 弱 sslmode 的 fail-closed 护栏：凭证改 `sslmode=require`/`verify-ca`，或换 VPC 内网地址 |
 | `GAUSSDB_DATA_MCP_CA_MISSING` | `verify-ca`/`verify-full` 未找到 CA 证书：把控制台下载的 `cacert.pem` 放到 credentials.json 同目录（hint 给出期望绝对路径），或用 `sslrootcert` 显式指定 |

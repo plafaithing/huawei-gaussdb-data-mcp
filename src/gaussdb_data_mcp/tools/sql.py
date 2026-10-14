@@ -15,7 +15,7 @@ from huaweicloud_mcp_core.errors import McpToolError
 
 from ..config import DataMcpSettings
 from ..credentials import DbCredentials
-from ..db import ConnectionPool
+from ..db import ConnectionPool, _cursor
 from ..sql_guard import SqlClassification, classify_sql
 
 _POOL: ConnectionPool | None = None
@@ -92,7 +92,7 @@ def _run_channel(query: str, channel: ToolRisk) -> dict[str, Any]:
     try:
         if channel is ToolRisk.READ:
             with _pool(settings).read_connection(creds, settings=settings) as conn:
-                with conn.cursor() as cur:
+                with _cursor(conn) as cur:
                     cur.execute(query)
                     if cur.description is None:
                         return {"columns": [], "row_count": 0, "rows": [], "truncated": False}
@@ -177,7 +177,7 @@ def _run_explain(query: str) -> dict[str, Any]:
     creds = DbCredentials.load(settings)
     try:
         with _pool(settings).read_connection(creds, settings=settings) as conn:
-            with conn.cursor() as cur:
+            with _cursor(conn) as cur:
                 cur.execute(f"EXPLAIN {query}")
                 return _format_rows(cur, settings)
     except McpToolError:

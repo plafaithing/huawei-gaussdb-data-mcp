@@ -15,6 +15,13 @@ CREDS = DbCredentials(host="h", port=8000, dbname="db", user="u", password="p",
 SETTINGS = DataMcpSettings()
 
 
+@pytest.fixture(autouse=True)
+def _psycopg2_track(monkeypatch):
+    # 池测试锁定 psycopg2 轨（drivers.py 双轨；Windows 默认会是 pyodbc），
+    # 保证生产主路径行为不变。pyodbc 轨见 test_drivers.py。
+    monkeypatch.setenv("GAUSSDB_DATA_MCP_DRIVER", "psycopg2")
+
+
 def _fake_psycopg2(connect_error=None):
     # mod.OperationalError 必须是真异常类：_connect 的 except 子句要拿它匹配，
     # 且 side_effect 只有挂真异常实例才会 raise（挂 MagicMock 只会被调用并返回）。
@@ -23,7 +30,6 @@ def _fake_psycopg2(connect_error=None):
         {"__str__": lambda s: "FATAL: invalid username/password"},
     )
     conn = MagicMock(name="conn")
-    conn.cursor.return_value.__enter__.return_value = MagicMock(name="cursor")
     mod = MagicMock(name="psycopg2")
     mod.OperationalError = op_error_cls
     if connect_error:
@@ -44,9 +50,8 @@ def test_read_connection_sets_read_only_session():
     pool = ConnectionPool(pool_min=1, pool_max=4)
     with patch.dict(sys.modules, {"psycopg2": mod}):
         with pool.read_connection(CREDS, settings=SETTINGS):
-            cursor = conn.cursor.return_value.__enter__.return_value
+            cursor = conn.cursor.return_value
             assert any("READ ONLY" in s for s in _executed(cursor))
-        cursor = conn.cursor.return_value.__enter__.return_value
         assert any("RESET ALL" in s for s in _executed(cursor))
 
 
@@ -58,7 +63,7 @@ def test_return_unlocks_session_advisory_locks():
     with patch.dict(sys.modules, {"psycopg2": mod}):
         with pool.read_connection(CREDS, settings=SETTINGS):
             pass
-        cursor = conn.cursor.return_value.__enter__.return_value
+        cursor = conn.cursor.return_value
         executed = _executed(cursor)
         assert "SELECT pg_advisory_unlock_all()" in executed
         assert executed.index("RESET ALL") < executed.index("SELECT pg_advisory_unlock_all()")

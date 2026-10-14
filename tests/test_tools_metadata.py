@@ -39,12 +39,14 @@ def pool_factory():
     calls = []
 
     def _install(rows, description):
+        # cursor 直出并带 close（db._cursor 手动关闭——pyodbc cursor 无上下文管理器）
         cursor = SimpleNamespace(
             description=description,
             execute=lambda sql, params: calls.append((sql, params)),
             fetchmany=lambda n: [list(r) for r in rows][:n],
+            close=lambda: None,
         )
-        conn = SimpleNamespace(cursor=lambda: _Ctx(cursor))
+        conn = SimpleNamespace(cursor=lambda: cursor)
         sql_tools._POOL = SimpleNamespace(
             read_connection=lambda creds, settings: _Ctx(conn)
         )
@@ -52,6 +54,13 @@ def pool_factory():
 
     yield _install
     sql_tools._POOL = None
+
+
+@pytest.fixture(autouse=True)
+def _psycopg2_placeholder_track(monkeypatch):
+    # 元数据参数化 SQL 按驱动占位符渲染（drivers.py 双轨）；本文件默认锁定
+    # psycopg2 轨（%s，与双轨改造前行为一致），pyodbc 轨见下方专项测试
+    monkeypatch.setenv("GAUSSDB_DATA_MCP_DRIVER", "psycopg2")
 
 
 @pytest.fixture
@@ -96,6 +105,18 @@ async def test_describe_table_parameterized(pool_factory, fake_db_creds):
     assert result["rows"] == [["id", "integer", "NO", None]]
     assert calls[0][1] == ("public", "orders")
     assert "table_schema = %s AND table_name = %s" in calls[0][0]
+
+
+async def test_list_tables_pyodbc_placeholder(pool_factory, fake_db_creds, monkeypatch):
+    # pyodbc 轨占位符是 ?，参数仍以独立元组传递（无字符串拼接）——对调用方透明
+    monkeypatch.setenv("GAUSSDB_DATA_MCP_DRIVER", "pyodbc")
+    calls = pool_factory(
+        [("orders", "BASE TABLE")], (("table_name",), ("table_type",))
+    )
+    result = await meta.list_tables(schema="public")
+    assert result["rows"] == [["orders", "BASE TABLE"]]
+    assert "table_schema = ?" in calls[0][0]
+    assert calls[0][1] == ("public",)
 
 
 async def test_raw_db_exception_mapped(pool_factory, fake_db_creds):

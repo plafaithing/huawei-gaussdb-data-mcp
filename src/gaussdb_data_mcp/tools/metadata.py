@@ -14,6 +14,8 @@ from huaweicloud_mcp_core import ToolRisk, guard
 from huaweicloud_mcp_core.errors import McpToolError
 
 from ..credentials import DbCredentials
+from ..db import _cursor
+from ..drivers import get_driver
 from .sql import _exec_failed, _format_rows, _pool, _settings
 
 # GaussDB 对象名允许 $（A 兼容模式，survey/03），故白名单含之；
@@ -35,7 +37,7 @@ def _query(sql: str, params: tuple) -> dict[str, Any]:
     creds = DbCredentials.load(settings)
     try:
         with _pool(settings).read_connection(creds, settings=settings) as conn:
-            with conn.cursor() as cur:
+            with _cursor(conn) as cur:
                 cur.execute(sql, params)
                 return _format_rows(cur, settings)
     except McpToolError:
@@ -65,10 +67,11 @@ async def list_tables(schema: str = "public") -> dict[str, Any]:
         schema: Schema name, default public.
     """
     _validate_identifier(schema, "schema")
+    ph = get_driver().placeholder()  # psycopg2 "%s" / pyodbc "?"，对调用方透明
     return await asyncio.to_thread(
         _query,
-        "SELECT table_name, table_type FROM information_schema.tables "
-        "WHERE table_schema = %s ORDER BY table_name",
+        f"SELECT table_name, table_type FROM information_schema.tables "
+        f"WHERE table_schema = {ph} ORDER BY table_name",
         (schema,),
     )
 
@@ -85,10 +88,11 @@ async def describe_table(schema: str, table: str) -> dict[str, Any]:
     """
     _validate_identifier(schema, "schema")
     _validate_identifier(table, "table")
+    ph = get_driver().placeholder()
     return await asyncio.to_thread(
         _query,
-        "SELECT column_name, data_type, is_nullable, column_default "
-        "FROM information_schema.columns "
-        "WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position",
+        f"SELECT column_name, data_type, is_nullable, column_default "
+        f"FROM information_schema.columns "
+        f"WHERE table_schema = {ph} AND table_name = {ph} ORDER BY ordinal_position",
         (schema, table),
     )

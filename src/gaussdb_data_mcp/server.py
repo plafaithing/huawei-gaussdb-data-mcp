@@ -8,6 +8,7 @@ server 名带 huaweicloud 前缀），而是直接构造 MCPServer + SqlGuardrai
 
 import argparse
 import logging
+import os
 import sys
 
 from huaweicloud_mcp_core.config import McpSettings
@@ -19,6 +20,7 @@ from mcp.types import CallToolResult
 
 from .audit import SqlAuditLogger
 from .config import DataMcpSettings
+from .drivers import get_driver
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
@@ -85,6 +87,16 @@ def build_sql_server() -> MCPServer:
     return server
 
 
+def _odbc_exit_guard() -> None:
+    """Windows + pyodbc 轨的退出规避：GaussDB ODBC DLL 在解释器退出清理阶段
+    堆损坏（0xC0000374，实测；运行期功能不受影响），os._exit(0) 跳过 GC/atexit。
+    其余环境正常返回。os._exit 不走缓冲区清理，stdio 输出先手动 flush。"""
+    if sys.platform == "win32" and get_driver().driver_name() == "pyodbc":
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="GaussDB Data MCP Server")
     parser.add_argument("-t", "--transport", choices=("stdio", "streamable-http"), default="stdio")
@@ -94,6 +106,7 @@ def main() -> None:
     server = build_sql_server()
     if args.transport == "stdio":
         server.run(transport="stdio")
+        _odbc_exit_guard()
         return
     if settings.server_host not in _LOOPBACK and not settings.tokens_file:
         raise SystemExit(
@@ -110,6 +123,7 @@ def main() -> None:
     if settings.tokens_file:
         app = BearerAuthMiddleware(app, tokens_file=settings.tokens_file)
     uvicorn.run(app, host=settings.server_host, port=settings.server_port)
+    _odbc_exit_guard()
 
 
 if __name__ == "__main__":

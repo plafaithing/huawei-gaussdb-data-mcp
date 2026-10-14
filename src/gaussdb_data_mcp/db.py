@@ -1,8 +1,8 @@
 """连接池：读连接复用（RESET ALL 归还），写/DDL 连接用完即关。
 
-psycopg2 懒加载——GaussDB 自研驱动仅 Linux/py311（survey/03），
-Windows 开发机上仅能通过 mock 测试本模块。
-认证失败映射专用错误码且绝不重试：密码连错 10 次锁号 1 天（survey/03 §7.7）。
+连接建立经 drivers.get_driver() 双轨分发（psycopg2 / pyodbc），连接细节、
+平台选择与认证失败映射见 drivers.py。认证失败绝不重试：密码连错 10 次
+锁号 1 天（survey/03 §7.7）。
 """
 
 import threading
@@ -11,10 +11,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from huaweicloud_mcp_core.errors import McpToolError
-
 from .config import DataMcpSettings
 from .credentials import DbCredentials
+from .drivers import _cursor, get_driver
 
 _IDLE_TTL_SECONDS = 600  # 服务端 session_timeout 默认 1800s，池内空闲必须更短
 
@@ -25,7 +24,6 @@ class ConnectionPool:
         self._lock = threading.Lock()
         self._free: list[tuple[float, Any]] = []  # (idle_since, connection)
         self._fingerprint: str | None = None
-        self._psycopg2: Any = None
 
     # ---- 对外接口 ----
 
@@ -35,7 +33,7 @@ class ConnectionPool:
     ) -> Iterator[Any]:
         conn = self._checkout(creds, settings)
         try:
-            with conn.cursor() as cur:
+            with _cursor(conn) as cur:
                 cur.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
             yield conn
         finally:
@@ -45,7 +43,7 @@ class ConnectionPool:
         """写/DDL 通道：专用连接，autocommit，用完即关。返回受影响行数。"""
         conn = self._connect(creds, settings)
         try:
-            with conn.cursor() as cur:
+            with _cursor(conn) as cur:
                 cur.execute(sql)
                 return cur.rowcount
         finally:
@@ -57,44 +55,8 @@ class ConnectionPool:
 
     # ---- 内部 ----
 
-    def _driver(self) -> Any:
-        if self._psycopg2 is None:
-            try:
-                import psycopg2  # GaussDB 自研 psycopg2（懒加载）
-            except ImportError as exc:
-                raise McpToolError(
-                    "GAUSSDB_DATA_MCP_DRIVER_MISSING",
-                    "GaussDB psycopg2 driver is not installed.",
-                    hint="Install the official GaussDB_Kernel_*_py311_linux whl "
-                         "(Linux + Python 3.11 only, see docs).",
-                ) from exc
-            self._psycopg2 = psycopg2
-        return self._psycopg2
-
     def _connect(self, creds: DbCredentials, settings: DataMcpSettings) -> Any:
-        psycopg2 = self._driver()
-        kwargs = dict(creds.connect_kwargs)
-        kwargs.update(
-            connect_timeout=10,
-            application_name=settings.application_name,
-            options=f"-c statement_timeout={settings.statement_timeout_ms}",
-        )
-        try:
-            conn = psycopg2.connect(**kwargs)
-        except psycopg2.OperationalError as exc:
-            text = str(exc)
-            if "password" in text.lower() or getattr(exc, "pgcode", None) == "28P01":
-                raise McpToolError(
-                    "GAUSSDB_DATA_MCP_AUTH_FAILED",
-                    "Database authentication failed. Retrying is disabled on purpose: "
-                    "10 failed logins lock the account for one day.",
-                    hint="Fix credentials.json; the server keeps running without retry.",
-                ) from exc
-            raise McpToolError(
-                "GAUSSDB_DATA_MCP_CONNECT_FAILED", f"Database connection failed: {text}"
-            ) from exc
-        conn.autocommit = True
-        return conn
+        return get_driver().connect(creds, settings)
 
     def _checkout(self, creds: DbCredentials, settings: DataMcpSettings) -> Any:
         with self._lock:
@@ -118,7 +80,7 @@ class ConnectionPool:
 
     def _return(self, conn: Any, *, fingerprint: str) -> None:
         try:
-            with conn.cursor() as cur:
+            with _cursor(conn) as cur:
                 cur.execute("RESET ALL")
                 # 会话级咨询锁不随 RESET ALL 释放：池化连接会替上个请求长期持锁，
                 # 归还前显式解锁（仍在同一 try 内——解锁失败走下方 close 路径）。

@@ -17,6 +17,9 @@ dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
 # 仅本地容器开发轨（README §2.4）：开源 psycopg2-binary 连本地 GaussDB 容器，
 # 云上实例仍须官方自研驱动（Linux/py311）。uv sync --group local 安装，不进主依赖。
 local = ["psycopg2-binary"]
+# Windows 原生开发/部署轨（README §2.5）：pyodbc + GaussDB ODBC Driver（gsqlodbc）
+# 连云上实例；不进主依赖——Linux 生产轨仍是官方自研 psycopg2。uv sync --group windows 安装。
+windows = ["pyodbc>=5.0"]
 
 [tool.uv.sources]
 huaweicloud-mcp-core = { path = "wheels/huaweicloud_mcp_core-1.1.1-py3-none-any.whl" }

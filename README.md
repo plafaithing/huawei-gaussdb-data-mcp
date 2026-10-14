@@ -150,6 +150,14 @@ ODBC 驱动后即可在 Windows 原生连云上实例（sha256 认证 / SSL / �
 2. `uv pip install pyodbc`（或 `uv sync --group windows`，对应 pyproject 的
    `windows` 依赖组，不进主依赖——Linux 生产轨仍是官方 psycopg2）。
 
+**Python 解释器要求（重要）**：Windows 轨必须使用 **python.org 官方安装包**的 Python
+（3.11+，`libcrypto-3.dll` 命名）。**uv 托管构建 / 部分第三方构建的 Python 其
+`_ssl.pyd` 动态依赖 `libcrypto-3-x64.dll`**——与 GaussDB ODBC 驱动的依赖
+`libcrypto-3-x64.dll` **同名**，进程内先加载 ssl 后加载 ODBC 驱动会因 DLL 同名
+符号冲突失败（症状：`IM003 ... (160)`，即使驱动依赖文件齐全）。官方构建的 OpenSSL
+DLL 命名不同（`libcrypto-3.dll`），无冲突，已实测。症状识别：只要换用官方
+python.org 安装的 Python 即消失。
+
 **驱动自动选择**：未配置时 **Windows → pyodbc，其他平台 → psycopg2**；环境变量
 `GAUSSDB_DATA_MCP_DRIVER=psycopg2|pyodbc` 可强制指定。ODBC 驱动名默认
 `GaussDB Unicode`，非默认安装名可用 `GAUSSDB_DATA_MCP_ODBC_DRIVER` 覆盖。

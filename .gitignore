@@ -1,0 +1,11 @@
+# 本文件是交付包独立成仓时的 gitignore（不依赖上级仓库规则）
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# 机密文件——绝不入库
+credentials.json
+tokens.json
+.env
+audit.jsonl

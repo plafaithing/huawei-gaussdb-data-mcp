@@ -1,0 +1,9 @@
+# POSIX 侧使用的交付文件强制 LF：
+# core.autocrlf=true 的 Windows 工作区 checkout 时不转 CRLF，
+# 保证脚本/校验文件拷到 Linux 后可直接执行与校验。
+install.sh text eol=lf
+run.sh text eol=lf
+.env_example text eol=lf
+SHA256SUMS text eol=lf
+deploy/Dockerfile text eol=lf
+deploy/nginx.conf.example text eol=lf

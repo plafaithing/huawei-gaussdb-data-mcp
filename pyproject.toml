@@ -1,0 +1,42 @@
+[project]
+name = "gaussdb-data-mcp"
+version = "0.1.0"
+description = "GaussDB 507 Data MCP server (data plane)"
+requires-python = ">=3.11"
+dependencies = [
+    "huaweicloud-mcp-core==1.1.1",
+    "mcp>=2.0,<3",
+    "sqlparse>=0.6,<0.7",
+]
+
+[project.scripts]
+gaussdb-data-mcp = "gaussdb_data_mcp.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
+# 仅本地容器开发轨（README §2.4）：开源 psycopg2-binary 连本地 GaussDB 容器，
+# 云上实例仍须官方自研驱动（Linux/py311）。uv sync --group local 安装，不进主依赖。
+local = ["psycopg2-binary"]
+
+[tool.uv.sources]
+huaweicloud-mcp-core = { path = "wheels/huaweicloud_mcp_core-1.1.1-py3-none-any.whl" }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = ["live: needs a real GaussDB instance and the official driver (Linux/py3.11)"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gaussdb_data_mcp"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

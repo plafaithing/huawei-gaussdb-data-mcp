@@ -1,0 +1,14 @@
+server {
+    listen 443 ssl;
+    server_name mcp.example.com;
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+    location /mcp {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;          # streamable-http 流式必需
+        proxy_read_timeout 3600s;
+    }
+}

@@ -138,6 +138,11 @@ class PyodbcDriver:
             f"Uid={creds.user}",
             f"Pwd={creds.password}",
             f"Sslmode={creds.sslmode}",
+            # LFConversion=0（gsqlodbc/psqlODBC 系数据源开关）：驱动默认把取回文本里的
+            # LF 规范化成 CRLF——读路径失真（服务端 octet_length 实测写入无损，仅读取
+            # 被改写，LF/CRLF 值读回不可区分）。关闭后读回与存储逐字节一致
+            # （2026-10-15 本地 A 库实测，data fidelity suite 的换行用例锁定此行为）。
+            "LFConversion=0",
         ]
         if creds.sslrootcert:
             # ODBC 惯例：含分隔符风险的值用花括号包裹（路径可能带空格）

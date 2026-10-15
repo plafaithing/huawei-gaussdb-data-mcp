@@ -60,6 +60,46 @@ GAUSSDB_DATA_MCP_ACOMPAT_CREDENTIALS_FILE=../ops/local-acompat-credentials.json 
 
 （凭证文件在 `ops/` 下不入库；`--group local` 见 pyproject 与主 README §2.4。）
 
+## 数据保真度专项（test_live_data_fidelity.py，教训 L8 固化）
+
+此前 live 数据全是 ASCII——issue #1 用户发现 pyodbc 中文乱码才暴露这个盲区。本文件
+把中国客户场景的真实数据形态锁进真库回归：中文（常用/生僻混繁体/首尾空格）、特殊
+字符（单引号/反斜杠/真实换行/emoji）、NULL vs 空串（A 兼容语义）、5000 字长文本
+（全量读回 + max_cell_chars 截断标记）、数字边界（int64 上限/0.1/3.14159）。
+
+两轨各跑一遍（凭证门控 `GAUSSDB_DATA_MCP_FIDELITY_CREDENTIALS_FILE`，未设整文件
+skip）：
+
+```bash
+cd gaussdb-data-mcp
+# psycopg2 轨（本地容器）
+GAUSSDB_DATA_MCP_FIDELITY_CREDENTIALS_FILE=../ops/local-acompat-credentials.json \
+GAUSSDB_DATA_MCP_DRIVER=psycopg2 \
+  uv run --group local pytest tests/integration/test_live_data_fidelity.py -m live -v
+# pyodbc 轨（Windows 原生）——必须用 python.org 官方构建的解释器（uv 托管构建的
+# libcrypto-3-x64.dll 与 gsqlodbc 同名冲突，IM003 (160)，见主 README §2.5）：
+py -3.13 -m venv .venv-odbc && uv pip install --python .venv-odbc/Scripts/python.exe \
+  "mcp>=2,<3" "sqlparse>=0.6,<0.7" pyodbc pytest pytest-asyncio wheels/huaweicloud_mcp_core-1.1.1-py3-none-any.whl -e .
+GAUSSDB_DATA_MCP_FIDELITY_CREDENTIALS_FILE=../ops/local-acompat-credentials.json \
+GAUSSDB_DATA_MCP_DRIVER=pyodbc .venv-odbc/Scripts/python.exe -m pytest \
+  tests/integration/test_live_data_fidelity.py -m live -v
+```
+
+**实测结果（本地集中式 A 库 n8n_test，127.0.0.1:5432，507.0.0，2026-10-15）**：
+psycopg2 轨 6/6、pyodbc 轨 6/6。首轮 pyodbc 轨抓到两个真问题并当场处置：
+
+1. **换行失真（已修）**：gsqlodbc 读路径默认把 LF 规范化成 CRLF（服务端
+   `octet_length` 实测写入无损、仅读取被改写）——服务连接串加 `LFConversion=0`
+   修复，读回与存储逐字节一致（drivers.py，与 issue #1 的 ansi=False 同类修复）。
+2. **布尔字符串化跨轨不一致（测试侧规避）**：`'' IS NULL` 原生布尔经 psycopg2
+   得 'True'、经 pyodbc 得 '1'——保真断言改用 `CASE WHEN ... THEN 'yes'` 显式
+   字符串化，不依赖驱动布尔表示。
+
+预探测事实（同日）：`standard_conforming_strings=on`、`server_encoding=UTF8`、
+字面量用 `E''` 形态显式化（不依赖 s_c_s）、A 库空串入库即 NULL、appuser 有 DDL 权限。
+
+副作用：探针表 `_mcp_fidelity_probe` 建删走 dangerous 通道确认流程，finally 兜底 DROP。
+
 ## 凭证来源
 
 容器内由 runner 从 `/repo/ops/create-bj4.json` 读取 `password`，生成 0600 的

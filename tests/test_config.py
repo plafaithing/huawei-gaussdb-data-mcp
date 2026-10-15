@@ -36,3 +36,20 @@ def test_bad_port_rejected(monkeypatch):
     monkeypatch.setenv("MCP_SERVER_PORT", "70000")
     with pytest.raises(McpToolError):
         DataMcpSettings.from_env()
+
+
+@pytest.mark.parametrize("name", [
+    "MCP_SERVER_PORT",
+    "GAUSSDB_DATA_MCP_MAX_ROWS",
+    "GAUSSDB_DATA_MCP_MAX_CELL_CHARS",
+    "GAUSSDB_DATA_MCP_MAX_SQL_CHARS",
+    "GAUSSDB_DATA_MCP_STATEMENT_TIMEOUT_MS",
+    "GAUSSDB_DATA_MCP_POOL_MIN",
+    "GAUSSDB_DATA_MCP_POOL_MAX",
+    "GAUSSDB_DATA_MCP_DB_PORT",
+])
+def test_non_integer_env_rejected(monkeypatch, name):
+    # issue #1：裸 int() 对非数字报 ValueError 裸栈；统一映射为 McpToolError
+    monkeypatch.setenv(name, "abc")
+    with pytest.raises(McpToolError, match="must be an integer"):
+        DataMcpSettings.from_env()

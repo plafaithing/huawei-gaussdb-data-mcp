@@ -70,11 +70,21 @@ def _cell(value: Any, limit: int) -> Any:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+_EXEC_ERROR_LIMIT = 300
+
+
 def _exec_failed(exc: Exception) -> McpToolError:
-    # 裸驱动异常（含池内死连接）统一映射：hint 兼顾语法错误与连接回收两种情况
+    # 裸驱动异常（含池内死连接）统一映射：hint 兼顾语法错误与连接回收两种情况。
+    # 原始报错文本对诊断有价值故保留（README 已知限制有声明），但截断到 300 字符：
+    # 数据库报错可能含 SQL 片段/表结构，限界即可，不做正则脱敏（保持简单）。
+    prefix = "Database execution failed: "
+    detail = f"{type(exc).__name__}: {exc}"
+    budget = _EXEC_ERROR_LIMIT - len(prefix)
+    if len(detail) > budget:
+        detail = detail[: budget - 1] + "…"
     return McpToolError(
         "GAUSSDB_DATA_MCP_EXEC_FAILED",
-        f"Database execution failed: {type(exc).__name__}: {exc}",
+        prefix + detail,
         hint="Check the SQL syntax; if a pooled connection was reclaimed, retrying once is safe.",
     )
 

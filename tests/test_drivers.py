@@ -15,7 +15,7 @@ from huaweicloud_mcp_core.errors import McpToolError
 from gaussdb_data_mcp import server as server_mod
 from gaussdb_data_mcp.config import DataMcpSettings
 from gaussdb_data_mcp.credentials import DbCredentials
-from gaussdb_data_mcp.drivers import Psycopg2Driver, PyodbcDriver, get_driver
+from gaussdb_data_mcp.drivers import Psycopg2Driver, PyodbcDriver, _cursor, get_driver
 
 CREDS = DbCredentials(host="h", port=8000, dbname="db", user="u", password="p",
                       sslmode="require", fingerprint="fp1")
@@ -75,6 +75,7 @@ def _fake_pyodbc():
     mod.Error = error_cls
     mod.InterfaceError = type("InterfaceError", (error_cls,), {})
     mod.LoginTimeoutError = type("LoginTimeoutError", (error_cls,), {})
+    mod.SQL_CHAR = 1  # 真 pyodbc.SQL_CHAR 的值（setdecoding 的类型参数）
     conn = MagicMock(name="conn")
     mod.connect = MagicMock(return_value=conn)
     return mod, conn
@@ -93,8 +94,60 @@ def test_pyodbc_connect_string_and_autocommit():
     for part in ("Driver={GaussDB Unicode}", "Server=h", "Port=8000", "Database=db",
                  "Uid=u", "Pwd=p", "Sslmode=require"):
         assert part in conn_str
-    assert mod.connect.call_args.kwargs == {"timeout": 10}  # timeout 即连接超时
+    assert "SSLRootCert" not in conn_str  # require 无证书：连接串不带 CA 参数
+    assert mod.connect.call_args.kwargs == {"timeout": 10, "ansi": False}  # issue #1：ansi=False
     assert conn.autocommit is True  # 实测必须：事务内 SET SESSION 不生效
+
+
+def test_pyodbc_connect_sets_utf8_encoding():
+    # issue #1：Windows 轨中文乱码——connect 后显式配置编码（真库实测 2026-10-15：
+    # 参数必须走宽字符 UTF-16LE（SQL_C_WCHAR），窄字符 UTF-8 参数被 gsqlodbc 按
+    # Windows ACP 误解入库；SQL_CHAR 读取解码按 pyodbc 默认 utf-8 固化，防默认漂移）。
+    # mock 层无法验证编码语义，真库回归见 test_pyodbc_live_chinese_roundtrip
+    mod, conn = _fake_pyodbc()
+    with patch.dict(sys.modules, {"pyodbc": mod}):
+        PyodbcDriver().connect(CREDS, SETTINGS)
+    conn.setdecoding.assert_any_call(mod.SQL_CHAR, encoding="utf-8")
+    conn.setencoding.assert_called_once_with(encoding="utf-16le")
+
+
+# ---- pyodbc verify-ca fail-closed（issue #1：pyodbc 轨此前不校验 CA）----
+
+VERIFY_CA_CREDS = DbCredentials(host="h", port=8000, dbname="db", user="u", password="p",
+                                sslmode="verify-ca", fingerprint="fp2")
+VERIFY_FULL_CREDS = DbCredentials(host="h", port=8000, dbname="db", user="u", password="p",
+                                  sslmode="verify-full", fingerprint="fp3")
+
+
+def test_pyodbc_verify_ca_without_cert_rejected():
+    # fail-closed：不校验 CA 就不许谎称 verify-ca（与 credentials 层 CA_MISSING 同语义）
+    mod, _ = _fake_pyodbc()
+    with patch.dict(sys.modules, {"pyodbc": mod}):
+        with pytest.raises(McpToolError) as exc:
+            PyodbcDriver().connect(VERIFY_CA_CREDS, SETTINGS)
+    assert exc.value.code == "GAUSSDB_DATA_MCP_CA_MISSING"
+    assert "sslrootcert" in exc.value.hint
+
+
+def test_pyodbc_verify_full_without_cert_rejected():
+    mod, _ = _fake_pyodbc()
+    with patch.dict(sys.modules, {"pyodbc": mod}):
+        with pytest.raises(McpToolError) as exc:
+            PyodbcDriver().connect(VERIFY_FULL_CREDS, SETTINGS)
+    assert exc.value.code == "GAUSSDB_DATA_MCP_CA_MISSING"
+
+
+def test_pyodbc_verify_ca_with_cert_passed_as_sslrootcert():
+    creds = DbCredentials(host="h", port=8000, dbname="db", user="u", password="p",
+                          sslmode="verify-ca", sslrootcert=r"C:\ca\cacert.pem",
+                          fingerprint="fp4")
+    mod, conn = _fake_pyodbc()
+    with patch.dict(sys.modules, {"pyodbc": mod}):
+        out = PyodbcDriver().connect(creds, SETTINGS)
+    assert out is conn
+    conn_str = mod.connect.call_args.args[0]
+    assert r"SSLRootCert={C:\ca\cacert.pem}" in conn_str  # ODBC 惯例：值用花括号包裹
+    assert "Sslmode=verify-ca" in conn_str
 
 
 def test_pyodbc_sets_session_statement_timeout():
@@ -150,6 +203,40 @@ def test_pyodbc_other_connect_error_mapped():
         with pytest.raises(McpToolError) as exc:
             PyodbcDriver().connect(CREDS, SETTINGS)
     assert exc.value.code == "GAUSSDB_DATA_MCP_CONNECT_FAILED"
+
+
+# ---- 真库回归（issue #1：Windows pyodbc 轨中文往返）----
+# mock 层无法验证 ODBC 编码语义（ansi=False / setdecoding 只能证明"调用了"），
+# 中文往返必须有真库用例。遵循 live marker 约定（与 tests/integration/test_live.py
+# 一致：marker + 环境变量门控，未设门时跳过，基线不受影响）。
+# 手动运行（Windows + GaussDB ODBC 驱动 + pyodbc，本地容器或云实例均可）：
+#   GAUSSDB_DATA_MCP_PYODBC_LIVE=1 \
+#   GAUSSDB_DATA_MCP_DB_HOST=127.0.0.1 GAUSSDB_DATA_MCP_DB_PORT=5432 \
+#   GAUSSDB_DATA_MCP_DB_DBNAME=n8n_test GAUSSDB_DATA_MCP_DB_USER=appuser \
+#   GAUSSDB_DATA_MCP_DB_PASSWORD=... \
+#   uv run pytest tests/test_drivers.py -k pyodbc_live -v
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    not os.getenv("GAUSSDB_DATA_MCP_PYODBC_LIVE"),
+    reason="GAUSSDB_DATA_MCP_PYODBC_LIVE is not set; "
+           "needs Windows + GaussDB ODBC + a real instance.",
+)
+def test_pyodbc_live_chinese_roundtrip():
+    settings = DataMcpSettings.from_env()
+    creds = DbCredentials.load(settings)
+    conn = PyodbcDriver().connect(creds, settings)
+    try:
+        with _cursor(conn) as cur:
+            cur.execute("DROP TABLE IF EXISTS _mcp_pyodbc_cn_probe")
+            cur.execute("CREATE TABLE _mcp_pyodbc_cn_probe (id int, name varchar(100))")
+            cur.execute("INSERT INTO _mcp_pyodbc_cn_probe VALUES (1, ?)", "张三")
+            cur.execute("SELECT name FROM _mcp_pyodbc_cn_probe WHERE id = 1")
+            row = cur.fetchone()
+            cur.execute("DROP TABLE _mcp_pyodbc_cn_probe")
+    finally:
+        conn.close()
+    assert row is not None and row[0] == "张三"
 
 
 # ---- 退出规避（server._odbc_exit_guard）----

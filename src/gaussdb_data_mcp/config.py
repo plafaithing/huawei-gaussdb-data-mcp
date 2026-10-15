@@ -13,6 +13,15 @@ def _env_bool(name: str, default: bool) -> bool:
     return value in {"true", "1", "yes"}
 
 
+def _env_int(name: str, default: str) -> int:
+    # 裸 int() 对非数字抛 ValueError 裸栈；统一映射为 McpToolError（issue #1）
+    raw = os.getenv(name, default)
+    try:
+        return int(raw)
+    except ValueError:
+        raise McpToolError("MCP_INVALID_ARGS", f"{name} must be an integer.") from None
+
+
 def _env_csv(name: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in os.getenv(name, "").split(",") if item.strip())
 
@@ -67,16 +76,16 @@ class DataMcpSettings:
             protected_names=_env_csv("GAUSSDB_DATA_MCP_PROTECTED_NAMES"),
             protected_tags=_env_csv("GAUSSDB_DATA_MCP_PROTECTED_TAGS"),
             server_host=os.getenv("MCP_SERVER_HOST", "127.0.0.1"),
-            server_port=int(os.getenv("MCP_SERVER_PORT", "8000")),
-            max_rows=int(os.getenv("GAUSSDB_DATA_MCP_MAX_ROWS", "200")),
-            max_cell_chars=int(os.getenv("GAUSSDB_DATA_MCP_MAX_CELL_CHARS", "256")),
-            max_sql_chars=int(os.getenv("GAUSSDB_DATA_MCP_MAX_SQL_CHARS", "65536")),
-            statement_timeout_ms=int(os.getenv("GAUSSDB_DATA_MCP_STATEMENT_TIMEOUT_MS", "30000")),
-            pool_min=int(os.getenv("GAUSSDB_DATA_MCP_POOL_MIN", "1")),
-            pool_max=int(os.getenv("GAUSSDB_DATA_MCP_POOL_MAX", "8")),
+            server_port=_env_int("MCP_SERVER_PORT", "8000"),
+            max_rows=_env_int("GAUSSDB_DATA_MCP_MAX_ROWS", "200"),
+            max_cell_chars=_env_int("GAUSSDB_DATA_MCP_MAX_CELL_CHARS", "256"),
+            max_sql_chars=_env_int("GAUSSDB_DATA_MCP_MAX_SQL_CHARS", "65536"),
+            statement_timeout_ms=_env_int("GAUSSDB_DATA_MCP_STATEMENT_TIMEOUT_MS", "30000"),
+            pool_min=_env_int("GAUSSDB_DATA_MCP_POOL_MIN", "1"),
+            pool_max=_env_int("GAUSSDB_DATA_MCP_POOL_MAX", "8"),
             application_name=os.getenv("GAUSSDB_DATA_MCP_APPLICATION_NAME", "gaussdb_data_mcp"),
             db_host=os.getenv("GAUSSDB_DATA_MCP_DB_HOST", ""),
-            db_port=int(os.getenv("GAUSSDB_DATA_MCP_DB_PORT", "0")),
+            db_port=_env_int("GAUSSDB_DATA_MCP_DB_PORT", "0"),
             db_dbname=os.getenv("GAUSSDB_DATA_MCP_DB_DBNAME", ""),
             db_user=os.getenv("GAUSSDB_DATA_MCP_DB_USER", ""),
             db_password=os.getenv("GAUSSDB_DATA_MCP_DB_PASSWORD", ""),

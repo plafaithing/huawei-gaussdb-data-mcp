@@ -168,6 +168,25 @@ async def test_raw_db_exception_mapped(pool_factory, fake_db_creds):
     assert _error_code(await sql_tools.execute_sql("SELECT 1")) == "GAUSSDB_DATA_MCP_EXEC_FAILED"
 
 
+async def test_exec_failed_message_truncated(pool_factory, fake_db_creds):
+    # issue #1：数据库报错文本可能含 SQL 片段/表结构——透传给客户端有诊断价值，
+    # 但截断到 300 字符限界（保留异常类型名）
+    pool = pool_factory()
+
+    class _Boom:
+        def __enter__(self):
+            raise RuntimeError("relation \"public.secret_table\" does not exist: " + "x" * 1000)
+
+        def __exit__(self, *a):
+            return False
+
+    pool.read_connection = lambda creds, settings: _Boom()
+    result = await sql_tools.execute_sql("SELECT 1")
+    message = result["error"]["message"]
+    assert len(message) <= 300
+    assert "RuntimeError" in message  # 类型名保留
+
+
 def test_pool_uses_env_sizes(monkeypatch):
     # 计划修正 2 的锁定：池尺寸吃环境变量
     monkeypatch.setenv("GAUSSDB_DATA_MCP_POOL_MIN", "2")

@@ -27,6 +27,9 @@ from .credentials import DbCredentials
 _DRIVER_ENV = "GAUSSDB_DATA_MCP_DRIVER"
 _ODBC_DRIVER_ENV = "GAUSSDB_DATA_MCP_ODBC_DRIVER"
 _DEFAULT_ODBC_DRIVER = "GaussDB Unicode"
+# 与 credentials._VERIFY_SSLMODES 同口径：驱动层再拦一道（defense-in-depth，
+# 覆盖绕过 DbCredentials.load 直接构造 creds 的调用方）
+_VERIFY_SSLMODES = {"verify-ca", "verify-full"}
 
 
 def _auth_failed() -> McpToolError:
@@ -115,8 +118,19 @@ class PyodbcDriver:
 
     def connect(self, creds: DbCredentials, settings: DataMcpSettings) -> Any:
         pyodbc = self._module()
+        if creds.sslmode in _VERIFY_SSLMODES and not creds.sslrootcert:
+            # fail-closed（issue #1）：不校验 CA 就不许谎称 verify-ca。与 credentials 层
+            # GAUSSDB_DATA_MCP_CA_MISSING 同语义；gsqlodbc 的 SSLRootCert 参数是否真实
+            # 校验 CA 以驱动版本行为为准（见 README §2.5），生产建议 psycopg2/Docker 轨
+            raise McpToolError(
+                "GAUSSDB_DATA_MCP_CA_MISSING",
+                f"pyodbc track: sslmode '{creds.sslmode}' requires an explicit CA certificate.",
+                hint="Set an absolute 'sslrootcert' path in credentials.json (passed to the "
+                     "ODBC driver as SSLRootCert); gsqlodbc CA validation depends on the "
+                     "driver version — prefer the psycopg2 or Docker track in production.",
+            )
         odbc_driver = os.environ.get(_ODBC_DRIVER_ENV, "").strip() or _DEFAULT_ODBC_DRIVER
-        conn_str = ";".join((
+        parts = [
             f"Driver={{{odbc_driver}}}",
             f"Server={creds.host}",
             f"Port={creds.port}",
@@ -124,15 +138,27 @@ class PyodbcDriver:
             f"Uid={creds.user}",
             f"Pwd={creds.password}",
             f"Sslmode={creds.sslmode}",
-        ))
+        ]
+        if creds.sslrootcert:
+            # ODBC 惯例：含分隔符风险的值用花括号包裹（路径可能带空格）
+            parts.append(f"SSLRootCert={{{creds.sslrootcert}}}")
+        conn_str = ";".join(parts)
         try:
-            conn = pyodbc.connect(conn_str, timeout=10)
+            # ansi=False（issue #1）：不传时 gsqlodbc 以 ANSI 模式协商，中文变 '?'；
+            # 显式 Unicode 模式后中文正常（实测）。
+            conn = pyodbc.connect(conn_str, timeout=10, ansi=False)
         except pyodbc.Error as exc:
             if _is_auth_failure(pyodbc, exc):
                 raise _auth_failed() from exc
             raise McpToolError(
                 "GAUSSDB_DATA_MCP_CONNECT_FAILED", f"Database connection failed: {exc}"
             ) from exc
+        # 编码显式化（issue #1，本地容器真库实测 2026-10-15）：gsqlodbc 对 SQL_C_CHAR
+        # 参数按 Windows ACP（中文系统 GBK）误解 UTF-8 字节（"张三"入库成 "寮犱笁"）；
+        # 宽字符参数（SQL_C_WCHAR，UTF-16LE）由驱动正确转 client_encoding 后入库，往返一致。
+        # setdecoding(SQL_CHAR, utf-8) 防御 CHAR 读取歧义（pyodbc 默认值，实测不介入，保留兜底）。
+        conn.setdecoding(pyodbc.SQL_CHAR, encoding="utf-8")
+        conn.setencoding(encoding="utf-16le")
         # 实测必须 autocommit：事务内 SET SESSION CHARACTERISTICS 不生效
         conn.autocommit = True
         # ODBC 无 options 启动参数：statement_timeout 连接后 SET（会话级，实测生效）

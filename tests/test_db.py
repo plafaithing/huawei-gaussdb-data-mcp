@@ -142,3 +142,39 @@ def test_driver_missing_error():
         with pytest.raises(McpToolError) as exc:
             pool.run_write(CREDS, settings=SETTINGS, sql="SELECT 1")
     assert "DRIVER" in exc.value.code or "driver" in exc.value.message.lower()
+
+
+def _fake_psycopg2_connect_refused():
+    # 非认证类连接失败（无 password 文本、无 28P01）→ drivers 映射为 CONNECT_FAILED
+    op_error_cls = type("OperationalError", (Exception,), {})
+    mod = MagicMock(name="psycopg2")
+    mod.OperationalError = op_error_cls
+    mod.connect = MagicMock(side_effect=op_error_cls(
+        "could not connect to server: Connection refused (0x0000274D)"))
+    return mod
+
+
+def test_connect_failed_ip_host_hint_eip():
+    # host 为裸 IP 且连接失败（issue #2）：hint 追加 EIP/实例重建自愈指引
+    mod = _fake_psycopg2_connect_refused()
+    ip_creds = DbCredentials(host="124.70.92.230", port=8000, dbname="db",
+                             user="u", password="p", fingerprint="fp1")
+    pool = ConnectionPool(pool_min=1, pool_max=4)
+    with patch.dict(sys.modules, {"psycopg2": mod}):
+        with pytest.raises(McpToolError) as exc:
+            pool.run_write(ip_creds, settings=SETTINGS, sql="SELECT 1")
+    assert exc.value.code == "GAUSSDB_DATA_MCP_CONNECT_FAILED"
+    assert "EIP changed" in (exc.value.hint or "")
+
+
+def test_connect_failed_domain_host_no_eip_hint():
+    # host 为域名（不可解析为 IP）：不加 EIP 指引，避免误导（域名解析自动跟随实例变更）
+    mod = _fake_psycopg2_connect_refused()
+    domain_creds = DbCredentials(host="mydb.example.com", port=8000, dbname="db",
+                                 user="u", password="p", fingerprint="fp1")
+    pool = ConnectionPool(pool_min=1, pool_max=4)
+    with patch.dict(sys.modules, {"psycopg2": mod}):
+        with pytest.raises(McpToolError) as exc:
+            pool.run_write(domain_creds, settings=SETTINGS, sql="SELECT 1")
+    assert exc.value.code == "GAUSSDB_DATA_MCP_CONNECT_FAILED"
+    assert "EIP changed" not in (exc.value.hint or "")

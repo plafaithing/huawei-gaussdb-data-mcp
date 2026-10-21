@@ -290,8 +290,14 @@ credentials.json + tokens.json（openssl 随机令牌），并按 sslmode 打印
 
 - 权限必须 `0600`（Windows 跳过权限位检查），否则读取即报 `MCP_CREDENTIAL_ERROR`；
   Windows 建议用 NTFS ACL 限制 credentials.json 的访问账户范围（右键 → 属性 → 安全）；
-- **每次工具调用热重读**：原子替换文件（写临时文件后 `mv`）即可轮换凭证，无需重启；
+- **每次工具调用热重读**：原子替换文件（写临时文件后 `mv`）即可轮换凭证，无需重启。
+  **热轮换必须串行**：热加载语义是「每次工具调用重读文件」，**并行执行「改文件 + 调工具」
+  可能读到旧值（实测复现）**——正确姿势：先原子替换文件、等写完成、再调用工具；
 - `port` 无默认值：GaussDB CN 端口通常 **8000**，驱动默认 5432 是错的（见故障排查）；
+- **host 建议用实例域名而非裸 IP（生产推荐，EIP 韧性）**：华为云 GaussDB 支持给实例绑定
+  公网/内网域名（控制台「公网域名」页签），EIP 被回收重分配时域名解析自动跟随，
+  credentials.json **无需改动**；裸 IP 在实例重建 / EIP 变更后即失效——此时更新 host
+  （下次调用生效，无需重启）即可恢复；host 为裸 IP 的连接失败，错误 hint 会给出该自愈指引；
 - **公网地址护栏（fail-closed）**：host 是公网地址（含域名）而 `sslmode` 低于
   `require`（即 disable/allow/prefer）时拒绝服务，返回
   `GAUSSDB_DATA_MCP_INSECURE_PUBLIC`。VPC 内网地址不受影响。
@@ -327,6 +333,12 @@ EIP / 安全组规则）见官方手册
 本服务是**数据面**：只持有**数据库账号密码**（本文件），通过数据库协议直连实例。
 华为云 AK/SK 属于**管控面**（gaussdb-mcp 管实例生命周期）的凭证域，与本服务无关，
 也不会经手。
+
+> **关于「endpoint 自动解析」（issue #2 建议的取舍说明）**：数据面若持 AK/SK 调管控面
+> API 把 instance_id 解析成 endpoint，会打破上述凭证域分离（数据面爆炸半径控制），
+> 故不采纳为默认能力。如客户确需该能力，建议在管控面 MCP 侧编排（gaussdb-mcp
+> `get_instance` 取最新地址后更新本文件），或直接采用上面的实例域名方案（解析自动跟随，
+> 无需任何编排）。该能力已记录 backlog。
 
 ### 3.3 tokens.json（HTTP 客户端鉴权）
 
@@ -442,6 +454,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA mybiz
   本服务对认证失败**刻意不重试**，凭证配错不会锁死账号；但请勿用其他工具反复试连；
 - 如需审计 MCP 执行的每条 SELECT：`audit_dml_state_select=1` 或把 MCP 账号加入
   `full_audit_users`（注意性能影响，运维决策）；
+- 数据面业务账号**查不了 DB 审计**（`pg_query_audit` 报 42501）：审计日志仅审计管理员
+  （AUDITADMIN）可见，属预期行为——MCP 自身操作审计在 `GAUSSDB_DATA_MCP_AUDIT_FILE`，
+  DB 侧审计的处置见 §8；
 - 登录/登出/越权/GRANT/REVOKE 默认都在数据库审计日志里（`audit_login_logout=7`）。
 
 ## 5. 接入
@@ -497,6 +512,16 @@ mv /tmp/tokens.new /opt/gaussdb-data-mcp/tokens.json
 ```
 
 数据库凭证（credentials.json）轮换同款操作。
+
+### 5.4 使用边界：MCP vs 应用侧批量通道
+
+- **数据面 MCP 适合**：agent 引导的小批量操作（单条 SQL ≤ max_rows 行级返回）、探索性
+  查询、schema 浏览、引导性数据修正；
+- **不适合**：几十万行+的大批量导入/迁移——单语句通道无批量协议，效率低（白名单也刻意
+  拒绝 COPY，安全取舍）；
+- **大批量导入走应用侧批量 API**（`executemany` / JDBC batch / DRS 迁移服务）——实测
+  800 行 CSV 经 `executemany` 顺畅导入；百万行级 INSERT 用单条大语句（`generate_series`）
+  也可行。
 
 ## 6. 生产部署
 
@@ -620,7 +645,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/gaussdb-dat
 | 现象 / 错误码 | 原因与处置 |
 |---|---|
 | 认证失败（`GAUSSDB_DATA_MCP_AUTH_FAILED`） | 凭证配错。服务**不重试**（防 10 次锁号 1 天），修复 credentials.json 后下次调用自动恢复 |
-| 连不上库（`GAUSSDB_DATA_MCP_CONNECT_FAILED`） | **5432 陷阱**：GaussDB CN 端口通常是 **8000**，驱动默认 5432 是错的；`port` 必须显式配置（无默认值是刻意的） |
+| 连不上库（`GAUSSDB_DATA_MCP_CONNECT_FAILED`） | **5432 陷阱**：GaussDB CN 端口通常是 **8000**，驱动默认 5432 是错的；`port` 必须显式配置（无默认值是刻意的）。若实例重建 / EIP 变更导致原 host 失效：更新 credentials.json 的 host（下次调用生效，无需重启）；host 为裸 IP 时错误 hint 会给出该自愈指引，生产建议改用实例域名（§3.2） |
 | 拒连，编码相关报错 | 目标库 `ZHS16GBK` / `GB18030_2022` 编码：官方 Python 驱动 2.9.10 起无法连接，建库须用兼容 PG 的编码（如 UTF8） |
 | Windows 轨中文变 `?` 或乱码 | 旧版缺编码规避（issue #1，已修复）：服务连接固定 `ansi=False` + 宽字符参数 + SQL_CHAR UTF-8 解码；确认使用本版代码，详见 §2.5 |
 | `GAUSSDB_DATA_MCP_DRIVER_MISSING` | psycopg2 轨：未装官方驱动 whl（或装了开源 psycopg2 未清理），Linux/py3.11 限制与安装步骤见 §2.3；pyodbc 轨：`uv pip install pyodbc` + 安装 GaussDB ODBC 驱动，见 §2.5 |
@@ -636,6 +661,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/gaussdb-dat
 | `GAUSSDB_DATA_MCP_DDL_DISABLED` | DDL 通道未开：`GAUSSDB_DATA_MCP_ENABLE_DDL=true`（且 READ_ONLY=false） |
 | `GAUSSDB_DATA_MCP_RISK_MISMATCH` | 语句与工具通道不匹配：UPDATE 走 `execute_sql_write`，DDL 走 `execute_sql_dangerous` |
 | `GAUSSDB_DATA_MCP_EXEC_FAILED` | 数据库执行报错（语法/权限等）：看信封 message；池内死连接重试一次是安全的。注意：数据库原始错误文本会透传给客户端（诊断需要，截断至 300 字符），生产环境若担心表结构泄露可在反代层过滤 |
+| 审计查询报 `42501 Permission denied to query audit` | **预期行为，不是故障**：GaussDB DB 审计日志仅**审计管理员（AUDITADMIN）**或专用审计账号可见，数据面 MCP 的最小权限业务账号查不了 `pg_query_audit` 等审计函数（§4.2 的账号准备原则）。MCP 自身的操作审计在 `GAUSSDB_DATA_MCP_AUDIT_FILE`（JSONL，含每条 SQL 与拦截原因，§6.4）；DB 侧审计请用审计管理员账号或控制台查询 |
 | `EXEC_FAILED`：`cannot execute nextval()/setval() in a read-only transaction` | 序列推进被只读会话（第二层）拦截，设计如此：序列无法经 `execute_sql` 推进；写环境用 `execute_sql_write` 的 `INSERT ... VALUES (seq.NEXTVAL)`，或 DDL 通道 `ALTER SEQUENCE`（详见 §4.1 序列条目） |
 | `EXEC_FAILED`：`Currval of sequence ... is not yet defined in this session` | CURRVAL 需同会话先成功 NEXTVAL；本服务读通道的 NEXTVAL 一律被只读会话拦截，故经本服务查 CURRVAL 总是此报错（Oracle/PG 本义，非缺陷） |
 | 建库报 `Compatibility args ... is invalid` | `DBCOMPATIBILITY` 取值随形态而异：集中式只认 `'A'`，分布式只认 `'ORA'`（详见 §4.1） |

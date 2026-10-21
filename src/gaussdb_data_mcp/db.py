@@ -5,17 +5,41 @@
 锁号 1 天（survey/03 §7.7）。
 """
 
+import ipaddress
 import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from huaweicloud_mcp_core.errors import McpToolError
+
 from .config import DataMcpSettings
 from .credentials import DbCredentials
 from .drivers import _cursor, get_driver
 
 _IDLE_TTL_SECONDS = 600  # 服务端 session_timeout 默认 1800s，池内空闲必须更短
+
+# 连接失败且 host 是裸 IP 时的自愈指引（issue #2）：放在 drivers 层之外的统一失败
+# 包装处，psycopg2/pyodbc 两轨共用。数据面不持 AK/SK（凭证域分离），不做管控面
+# API 自动解析 endpoint；域名可跟随 EIP 变更，见 README §3.2。
+_EIP_HINT = (
+    "If the instance was recreated or its EIP changed, update 'host' in "
+    "credentials.json (takes effect on the next call, no restart). Consider "
+    "using an instance domain name instead of a raw IP to survive EIP changes."
+)
+
+
+def _is_ip_host(host: str) -> bool:
+    """host 是否为裸 IP（ipaddress 可解析，含 IPv6；与 credentials._is_public_host 同款工具）。
+
+    域名不追加 EIP 指引：域名解析自动跟随实例变更，提示改 host 反而误导。
+    """
+    try:
+        ipaddress.ip_address(host.strip())
+    except ValueError:
+        return False
+    return True
 
 
 class ConnectionPool:
@@ -56,7 +80,13 @@ class ConnectionPool:
     # ---- 内部 ----
 
     def _connect(self, creds: DbCredentials, settings: DataMcpSettings) -> Any:
-        return get_driver().connect(creds, settings)
+        try:
+            return get_driver().connect(creds, settings)
+        except McpToolError as exc:
+            # 连接失败且 host 是裸 IP：两轨统一的失败包装处追加 EIP 自愈指引（issue #2）
+            if exc.code == "GAUSSDB_DATA_MCP_CONNECT_FAILED" and _is_ip_host(creds.host):
+                exc.hint = f"{exc.hint} {_EIP_HINT}" if exc.hint else _EIP_HINT
+            raise
 
     def _checkout(self, creds: DbCredentials, settings: DataMcpSettings) -> Any:
         with self._lock:

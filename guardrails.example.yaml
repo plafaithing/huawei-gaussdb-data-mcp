@@ -1,0 +1,9 @@
+rules:
+  - id: protect-core-tables
+    action: block
+    message: "Core business tables are protected from DDL."
+    match:
+      tools: ["execute_sql_dangerous"]
+      risks: ["DANGEROUS"]
+      resources:
+        name_patterns: ["^(orders|customers|payments)$"]

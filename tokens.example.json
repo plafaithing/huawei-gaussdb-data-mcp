@@ -1,0 +1,6 @@
+{
+  "tokens": {
+    "dify-prod": "CHANGE_ME_random_long_ascii_token_1",
+    "claude-dev": "CHANGE_ME_random_long_ascii_token_2"
+  }
+}

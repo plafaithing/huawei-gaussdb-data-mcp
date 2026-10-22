@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """SQL 执行工具：三通道 + explain。
 
 通道锁：工具静态风险（core 中间件的只读拦截/confirm 门）+ 工具体内
@@ -14,8 +17,9 @@ from huaweicloud_mcp_core import ToolRisk, guard
 from huaweicloud_mcp_core.errors import McpToolError
 
 from ..client.credentials import DbCredentials
+from ..client.drivers import cursor
 from ..config import DataMcpSettings
-from ..service.database import ConnectionPool, _cursor
+from ..service.database import ConnectionPool
 from ..service.sql_guard import SqlClassification, classify_sql
 
 _POOL: ConnectionPool | None = None
@@ -103,7 +107,7 @@ def _run_channel(query: str, channel: ToolRisk) -> dict[str, Any]:
         if channel is ToolRisk.READ:
             with (
                 _pool(settings).read_connection(creds, settings=settings) as conn,
-                _cursor(conn) as cur,
+                cursor(conn) as cur,
             ):
                 cur.execute(query)
                 if cur.description is None:
@@ -190,7 +194,7 @@ def _run_explain(query: str) -> dict[str, Any]:
     try:
         with (
             _pool(settings).read_connection(creds, settings=settings) as conn,
-            _cursor(conn) as cur,
+            cursor(conn) as cur,
         ):
             cur.execute(f"EXPLAIN {query}")
             return _format_rows(cur, settings)

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """drivers.py 单元测试：驱动选择 / pyodbc 连接行为 / 退出规避。
 
 全部 mock 驱动模块（psycopg2 官方驱动仅 Linux/py311；pyodbc 属 windows 可选
@@ -14,7 +17,7 @@ from huaweicloud_mcp_core.errors import McpToolError
 
 from mcp_server_gaussdb_data import server as server_mod
 from mcp_server_gaussdb_data.client.credentials import DbCredentials
-from mcp_server_gaussdb_data.client.drivers import Psycopg2Driver, PyodbcDriver, _cursor, get_driver
+from mcp_server_gaussdb_data.client.drivers import Psycopg2Driver, PyodbcDriver, cursor, get_driver
 from mcp_server_gaussdb_data.config import DataMcpSettings
 
 CREDS = DbCredentials(
@@ -181,7 +184,7 @@ def test_pyodbc_sets_session_statement_timeout():
         PyodbcDriver().connect(CREDS, SETTINGS)
     cursor = conn.cursor.return_value
     assert "SET statement_timeout = 30000" in _executed(cursor)
-    cursor.close.assert_called_once()  # pyodbc cursor 无 with，_cursor 手动 close
+    cursor.close.assert_called_once()  # pyodbc cursor 无 with，cursor 手动 close
 
 
 def test_pyodbc_driver_name_env_override(monkeypatch):
@@ -249,7 +252,7 @@ def test_pyodbc_live_chinese_roundtrip():
     creds = DbCredentials.load(settings)
     conn = PyodbcDriver().connect(creds, settings)
     try:
-        with _cursor(conn) as cur:
+        with cursor(conn) as cur:
             cur.execute("DROP TABLE IF EXISTS _mcp_pyodbc_cn_probe")
             cur.execute("CREATE TABLE _mcp_pyodbc_cn_probe (id int, name varchar(100))")
             cur.execute("INSERT INTO _mcp_pyodbc_cn_probe VALUES (1, ?)", "张三")

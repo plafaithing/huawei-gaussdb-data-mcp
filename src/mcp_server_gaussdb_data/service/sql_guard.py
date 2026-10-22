@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """SQL 白名单分类器：把单条 SQL 分类为 READ / WRITE / DANGEROUS，其余一律拒绝。
 
 设计（survey/01 §5、survey/04 §7.1）：
@@ -16,6 +19,7 @@ EMPTY / NUL_BYTE / TOO_LONG / MULTI_STATEMENT / NOT_WHITELISTED / FORBIDDEN_KEYW
 """
 
 from dataclasses import dataclass
+from typing import NoReturn, cast
 
 import sqlparse
 from huaweicloud_mcp_core import ToolRisk
@@ -104,7 +108,7 @@ class SqlClassification:
     kind: str  # 首关键词（大写），供审计与结果展示
 
 
-def _reject(code: str, message: str, hint: str | None = None) -> None:
+def _reject(code: str, message: str, hint: str | None = None) -> NoReturn:
     raise McpToolError(f"GAUSSDB_DATA_MCP_{code}", message, hint=hint)
 
 
@@ -158,9 +162,9 @@ def _identifier_value(token: sqlparse.sql.Token) -> str | None:
     if token.ttype is None:
         return None
     if token.ttype in sqlparse.tokens.Name:
-        return token.value.strip('`"').upper()
+        return cast("str", token.value).strip('`"').upper()
     if token.ttype in sqlparse.tokens.String.Symbol:
-        return token.value.strip('"`').upper()
+        return cast("str", token.value).strip('"`').upper()
     return None
 
 
@@ -233,7 +237,7 @@ def classify_sql(sql: str, *, max_sql_chars: int = DEFAULT_MAX_SQL_CHARS) -> Sql
     if len(sql) > max_sql_chars:
         _reject("TOO_LONG", f"SQL exceeds {max_sql_chars} characters.")
 
-    statements = sqlparse.parse(sql)
+    statements: list[sqlparse.sql.Statement] = list(sqlparse.parse(sql))
     # 语句终结分号之后还允许存在的只有空白；注释或其他任何 token 都视为多语句。
     # 必须在过滤纯注释 statement 之前做：sqlparse 会把 ``SELECT 1; /* c */`` 的尾注释
     # 切成第二个 statement，若先过滤再检查就会漏放。

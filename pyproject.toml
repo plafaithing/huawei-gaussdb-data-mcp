@@ -60,6 +60,10 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 strict = true
 python_version = "3.10"
 
+# sqlparse ships py.typed but leaves Statement.flatten and token_first unannotated;
+# exclude it from disallow_untyped_calls when called from our strict-typed code.
+untyped_calls_exclude = ["sqlparse"]
+
 # sqlparse ships without type stubs (data-plane SQL classifier dependency).
 [[tool.mypy.overrides]]
 module = ["sqlparse.*"]

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """sql_guard 对抗测试套件。所有用例不依赖数据库。"""
 
 from importlib.metadata import version

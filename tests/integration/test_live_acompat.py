@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """A/ORA 兼容专项 live 测试：在 DBCOMPATIBILITY='A' 的 GaussDB 库上端到端验证。
 
 运行方式（两种形态共用本文件，结果对照写进 README §4a）：
@@ -5,10 +8,10 @@
 - 本地集中式容器（n8n_test，A 库，开源 psycopg2-binary）：
 
     cd server/mcp_server_gaussdb_data
-    GAUSSDB_DATA_MCP_ACOMPAT_CREDENTIALS_FILE=../ops/local-acompat-credentials.json \
+    GAUSSDB_DATA_MCP_ACOMPAT_CREDENTIALS_FILE=/path/to/local-acompat-credentials.json \
       uv run --group local pytest tests/integration/test_live_acompat.py -m live -v
 
-- 云上分布式（GY1，先由 run_live_acompat.sh 建出 A 库并注入凭证）：
+- 云上分布式实例（先由 run_live_acompat.sh 建出 A 库并注入凭证）：
 
     bash tests/integration/run_live_acompat.sh
 

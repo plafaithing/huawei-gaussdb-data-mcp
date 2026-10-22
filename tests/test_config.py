@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 import pytest
 from huaweicloud_mcp_core.errors import McpToolError
 

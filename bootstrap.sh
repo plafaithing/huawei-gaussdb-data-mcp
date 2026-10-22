@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 # bootstrap.sh —— 向导式最小可用配置生成器（issue #1）
 #
 # 生成最小接入所需的两份机密文件（均 chmod 600，内容不回显到终端日志）：

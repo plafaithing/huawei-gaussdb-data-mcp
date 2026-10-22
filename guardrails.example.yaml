@@ -1,9 +1,13 @@
+# Data-plane guardrails example. Tool parameters here are SQL text (query /
+# schema / table), so the parameter-level resource match (resources.ids /
+# id_prefixes / name_patterns / tags) never fires on SQL statements. Use
+# tool-level matching (tools / risks); SQL-granular protection is carried by
+# the three data layers: SQL allowlist classification + channel lock,
+# read-only sessions, and the least-privilege database account.
 rules:
-  - id: protect-core-tables
-    action: block
-    message: "Core business tables are protected from DDL."
+  - id: protect-ddl-channel
+    action: block          # block / confirm / warn
+    message: "DDL is blocked on this deployment; use the approved change window."
     match:
       tools: ["execute_sql_dangerous"]
       risks: ["DANGEROUS"]
-      resources:
-        name_patterns: ["^(orders|customers|payments)$"]

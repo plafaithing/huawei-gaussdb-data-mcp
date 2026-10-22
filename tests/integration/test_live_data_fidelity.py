@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """数据保真度 live 测试（教训 L8 固化，2026-10-15）：面向中国客户场景的真实数据形态。
 
 此前三套 live 测试数据全是 ASCII（issue #1 用户发现 pyodbc 轨中文乱码才暴露）——
@@ -12,7 +15,7 @@
 两轨共用本文件（驱动按 GAUSSDB_DATA_MCP_DRIVER 解析，Windows 默认 pyodbc）：
 
     # psycopg2 轨（本地容器，开源 psycopg2-binary，连本地 A 兼容库）
-    GAUSSDB_DATA_MCP_FIDELITY_CREDENTIALS_FILE=../ops/local-acompat-credentials.json \
+    GAUSSDB_DATA_MCP_FIDELITY_CREDENTIALS_FILE=/path/to/local-acompat-credentials.json \
     GAUSSDB_DATA_MCP_DRIVER=psycopg2 \
       uv run --group local pytest tests/integration/test_live_data_fidelity.py -m live -v
 

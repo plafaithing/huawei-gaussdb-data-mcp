@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """GAUSSDB_DATA_MCP_* 配置。与 core 的 HUAWEICLOUD_MCP_* 心智对齐，但默认值更安全。"""
 
 import os

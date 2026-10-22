@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """db.py 单元测试：全部 mock psycopg2，不触碰真实驱动（官方驱动仅 Linux/py311）。"""
 
 import sys

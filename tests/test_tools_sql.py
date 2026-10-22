@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """tools/sql.py 单元测试：mock ConnectionPool，专注通道锁/开关/格式化逻辑。
 
 错误断言说明：core @guard 包装后 McpToolError 不再向上 raise，而是返回

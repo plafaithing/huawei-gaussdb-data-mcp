@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 # fetch-driver.sh —— 从官方 GaussDB 驱动包自动提取 Python 驱动 whl 到 wheels/
 #
 # 官方驱动不发布 PyPI，只随驱动包（DBS-GaussDB-driver_*.tar.gz，约 1.6GB）按

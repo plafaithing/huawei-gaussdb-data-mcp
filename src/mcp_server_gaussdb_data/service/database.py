@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """连接池：读连接复用（RESET ALL 归还），写/DDL 连接用完即关。
 
 连接建立经 client/drivers.get_driver() 双轨分发（psycopg2 / pyodbc），连接细节、
@@ -10,12 +13,12 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from typing import Any
+from typing import Any, cast
 
 from huaweicloud_mcp_core.errors import McpToolError
 
 from ..client.credentials import DbCredentials
-from ..client.drivers import _cursor, get_driver
+from ..client.drivers import cursor, get_driver
 from ..config import DataMcpSettings
 
 _IDLE_TTL_SECONDS = 600  # 服务端 session_timeout 默认 1800s，池内空闲必须更短
@@ -55,7 +58,7 @@ class ConnectionPool:
     def read_connection(self, creds: DbCredentials, *, settings: DataMcpSettings) -> Iterator[Any]:
         conn = self._checkout(creds, settings)
         try:
-            with _cursor(conn) as cur:
+            with cursor(conn) as cur:
                 cur.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
             yield conn
         finally:
@@ -65,9 +68,9 @@ class ConnectionPool:
         """写/DDL 通道：专用连接，autocommit，用完即关。返回受影响行数。"""
         conn = self._connect(creds, settings)
         try:
-            with _cursor(conn) as cur:
+            with cursor(conn) as cur:
                 cur.execute(sql)
-                return cur.rowcount
+                return cast("int", cur.rowcount)
         finally:
             conn.close()
 
@@ -104,7 +107,7 @@ class ConnectionPool:
 
     def _return(self, conn: Any, *, fingerprint: str) -> None:
         try:
-            with _cursor(conn) as cur:
+            with cursor(conn) as cur:
                 cur.execute("RESET ALL")
                 # 会话级咨询锁不随 RESET ALL 释放：池化连接会替上个请求长期持锁，
                 # 归还前显式解锁（仍在同一 try 内——解锁失败走下方 close 路径）。

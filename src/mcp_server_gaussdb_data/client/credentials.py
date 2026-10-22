@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """数据库凭证与 MCP token 的热轮换读取（对齐 core 的 credentials 模式）。
 
 - 每次工具调用都重新读文件（原子替换即可轮换，无需重启）。

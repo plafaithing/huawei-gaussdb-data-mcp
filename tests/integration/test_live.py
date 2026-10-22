@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """真库 live 集成测试：在真实华为云 GaussDB 实例上端到端验证全部 7 个工具。
 
 运行方式（宿主机仓库根，详见同目录 README.md）：

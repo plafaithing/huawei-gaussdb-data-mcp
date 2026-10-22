@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """数据库驱动抽象：psycopg2（Linux/官方 whl）与 pyodbc（Windows/GaussDB ODBC）双轨。
 
 自动选择：
@@ -43,7 +46,7 @@ def _auth_failed() -> McpToolError:
 
 
 @contextmanager
-def _cursor(conn: Any) -> Iterator[Any]:
+def cursor(conn: Any) -> Iterator[Any]:
     """统一游标作用域：psycopg2 cursor 支持 with 而 pyodbc cursor 不支持，
     但两者都有 close()——统一手动关闭。"""
     cur = conn.cursor()
@@ -167,7 +170,7 @@ class PyodbcDriver:
         # 实测必须 autocommit：事务内 SET SESSION CHARACTERISTICS 不生效
         conn.autocommit = True
         # ODBC 无 options 启动参数：statement_timeout 连接后 SET（会话级，实测生效）
-        with _cursor(conn) as cur:
+        with cursor(conn) as cur:
             cur.execute(f"SET statement_timeout = {settings.statement_timeout_ms}")
         return conn
 

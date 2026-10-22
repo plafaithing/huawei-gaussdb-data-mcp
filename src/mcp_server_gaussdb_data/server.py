@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """MCPServer 组装与运行入口。
 
 组装方式：不用 core 的 build_server（它读 HUAWEICLOUD_* 且只读默认 False、
@@ -17,6 +20,7 @@ from huaweicloud_mcp_core.guardrails.middleware import GuardrailsMiddleware
 from huaweicloud_mcp_core.guardrails.rules import load_rules
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult
+from starlette.types import ASGIApp
 
 from .audit import SqlAuditLogger
 from .client.drivers import get_driver
@@ -119,7 +123,7 @@ def main() -> None:
 
     # host 传实际监听地址：SDK 据此决定是否启用 localhost DNS rebinding 保护，
     # 非回环监听时若按默认 127.0.0.1 误判会拒绝外部客户端。
-    app = server.streamable_http_app(host=settings.server_host)
+    app: ASGIApp = server.streamable_http_app(host=settings.server_host)
     if settings.tokens_file:
         app = BearerAuthMiddleware(app, tokens_file=settings.tokens_file)
     uvicorn.run(app, host=settings.server_host, port=settings.server_port)

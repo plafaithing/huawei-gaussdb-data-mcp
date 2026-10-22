@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """审计：继承 core AuditLogger，把 SQL 文本截断从 200 放宽（诊断需要），
 并附加 HTTP 客户端身份（auth 中间件写入 contextvar）。
 

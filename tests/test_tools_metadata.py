@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """tools/metadata.py 单元测试：mock 池层，专注标识符校验与参数化查询。
 
 错误断言说明与 test_tools_sql.py 一致：@guard 包装后 McpToolError 不再向上

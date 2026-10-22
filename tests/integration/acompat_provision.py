@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """分布式实例（GY1）A 兼容建库探测与清理：通过本服务 MCP execute_sql_dangerous 全链路执行。
 
 用法（live runner 容器内，工作目录 server/mcp_server_gaussdb_data）：

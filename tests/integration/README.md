@@ -9,17 +9,21 @@ list_schemas / list_tables / describe_table），覆盖只读拦截、确认门�
 | 项 | 说明 |
 | --- | --- |
 | Docker | 本机 Docker Desktop 运行中（测试在 `python:3.11-slim` 容器内执行） |
-| 测试实例 | 华为云 BJ4 集中式 `mcp-sql-test-bj4`（内核 507.0.0），公网 EIP `1.94.240.147:8000`，安全组已放行本机出口 IP |
-| 实例凭证 | `ops/create-bj4.json`（创建实例时的 payload，`password` 字段即管理员 `root` 的密码；该文件不入库） |
-| 自研驱动 whl | `ops/driver-unpack/python-driver/python_driver/Euler2.10/GaussDB_Kernel_507_0_0-2.9.10-py311-none-linux_x86_64.whl`（仅 Linux/py311，故宿主 Windows 不能直跑） |
-| 网络 | 容器内 pip/apt 走清华源；实例走公网 EIP + `sslmode=require`（公网地址触发项目的强 SSL 护栏，这是预期行为） |
+| 测试实例 | 一台可用的 GaussDB 507 实例（内核 507.0.0；公网 EIP 或 VPC 内网均可），地址由 `LIVE_HOST` 指定 |
+| 实例凭证 | `LIVE_PASSWORD_JSON` 指向的 JSON 文件（顶层 `password` 字段即管理员密码；本地文件，不入库） |
+| 自研驱动 whl | `DRIVER_WHL` 指向的官方自研驱动 whl（仅 Linux/py311，故宿主 Windows 不能直跑；提取方式见包内 `fetch-driver.sh`） |
+| 网络 | 公网 EIP 访问时凭证须 `sslmode=require`（公网地址触发项目的强 SSL 护栏，这是预期行为） |
 
 ## 运行方式
 
-仓库根执行：
+仓库根执行。`DRIVER_WHL` / `LIVE_PASSWORD_JSON` / `LIVE_HOST` 三个环境变量是
+本地环境输入（不提交仓库；官方 CI 不执行 live 套件，缺失时 runner 直接报错退出）：
 
 ```bash
-bash server/mcp_server_gaussdb_data/tests/integration/run_live.sh
+DRIVER_WHL=/path/to/GaussDB_Kernel_*-py311-none-linux_x86_64.whl \
+LIVE_PASSWORD_JSON=/path/to/instance-payload.json \
+LIVE_HOST=<instance-host> \
+  bash server/mcp_server_gaussdb_data/tests/integration/run_live.sh
 ```
 
 runner 是自包含的：宿主机段用 Docker 投递容器（仓库挂载为只读 `/repo`），容器内段
@@ -30,7 +34,8 @@ streamable-http 冒烟（无 token 401 / 带 Bearer token initialize 200）。�
 - 末行 `LIVE SUITE OK`。
 
 本机日常 `uv run pytest` 不受影响：live 测试带 `marker=live` 且未设
-`GAUSSDB_DATA_MCP_CREDENTIALS_FILE` 时整文件 skip。
+`GAUSSDB_DATA_MCP_CREDENTIALS_FILE` 时整文件 skip；官方 CI 同样不执行 `-m live`
+（live 默认 skip）。
 
 ## A 兼容专项（run_live_acompat.sh）
 
@@ -38,7 +43,8 @@ streamable-http 冒烟（无 token 401 / 带 Bearer token initialize 200）。�
 bash server/mcp_server_gaussdb_data/tests/integration/run_live_acompat.sh
 ```
 
-默认指向 GY1 分布式实例（`LIVE_HOST` / `LIVE_PASSWORD_JSON` 可覆盖）。流程：
+实例由 `DRIVER_WHL` / `LIVE_HOST` / `LIVE_PASSWORD_JSON` 三个环境变量指定（同
+run_live.sh，分布式/集中式均可，探测行为差异见下文实测备案）。流程：
 
 1. `acompat_provision.py create --compat ORA,A,PG,B,C`：经 MCP
    `execute_sql_dangerous`（confirm 流程）依次尝试建
@@ -54,11 +60,11 @@ bash server/mcp_server_gaussdb_data/tests/integration/run_live_acompat.sh
 本地集中式轨道（n8n_test，A 库，开源 psycopg2-binary，不经容器）：
 
 ```bash
-GAUSSDB_DATA_MCP_ACOMPAT_CREDENTIALS_FILE=../ops/local-acompat-credentials.json \
+GAUSSDB_DATA_MCP_ACOMPAT_CREDENTIALS_FILE=/path/to/local-acompat-credentials.json \
   uv run --group local pytest tests/integration/test_live_acompat.py -m live -v
 ```
 
-（凭证文件在 `ops/` 下不入库；`--group local` 见 pyproject 与主 README §2.4。）
+（凭证文件为本地文件，不入库；`--group local` 的用途见 pyproject。）
 
 ## 数据保真度专项（test_live_data_fidelity.py，教训 L8 固化）
 
@@ -73,14 +79,15 @@ skip）：
 ```bash
 cd server/mcp_server_gaussdb_data
 # psycopg2 轨（本地容器）
-GAUSSDB_DATA_MCP_FIDELITY_CREDENTIALS_FILE=../ops/local-acompat-credentials.json \
+GAUSSDB_DATA_MCP_FIDELITY_CREDENTIALS_FILE=/path/to/local-acompat-credentials.json \
 GAUSSDB_DATA_MCP_DRIVER=psycopg2 \
   uv run --group local pytest tests/integration/test_live_data_fidelity.py -m live -v
 # pyodbc 轨（Windows 原生）——必须用 python.org 官方构建的解释器（uv 托管构建的
-# libcrypto-3-x64.dll 与 gsqlodbc 同名冲突，IM003 (160)，见主 README §2.5）：
+# libcrypto-3-x64.dll 与 gsqlodbc 同名冲突，IM003 (160)，见服务 README 的 Windows
+# 驱动说明）：
 py -3.13 -m venv .venv-odbc && uv pip install --python .venv-odbc/Scripts/python.exe \
   "mcp>=2,<3" "sqlparse>=0.6,<0.7" pyodbc pytest pytest-asyncio ../../libs/huaweicloud_mcp_core -e .
-GAUSSDB_DATA_MCP_FIDELITY_CREDENTIALS_FILE=../ops/local-acompat-credentials.json \
+GAUSSDB_DATA_MCP_FIDELITY_CREDENTIALS_FILE=/path/to/local-acompat-credentials.json \
 GAUSSDB_DATA_MCP_DRIVER=pyodbc .venv-odbc/Scripts/python.exe -m pytest \
   tests/integration/test_live_data_fidelity.py -m live -v
 ```
@@ -102,22 +109,22 @@ psycopg2 轨 6/6、pyodbc 轨 6/6。首轮 pyodbc 轨抓到两个真问题并当
 
 ## 凭证来源
 
-容器内由 runner 从 `/repo/ops/create-bj4.json` 读取 `password`，生成 0600 的
+容器内由 runner 从 `LIVE_PASSWORD_JSON` 指向的 JSON 读取 `password`，组装 0600 的
 `/tmp/live-credentials.json`：
 
 ```json
 {
-  "host": "1.94.240.147",
+  "host": "<LIVE_HOST>",
   "port": 8000,
   "dbname": "postgres",
   "user": "root",
-  "password": "<来自 ops/create-bj4.json>",
+  "password": "<来自 LIVE_PASSWORD_JSON 的 password 字段>",
   "sslmode": "require"
 }
 ```
 
-密码只在容器文件系统内流转，不进命令行参数、不回显。换实例时改 runner 中
-`creds` 一段与 `ops/create-bj4.json`。
+密码只在容器文件系统内流转，不进命令行参数、不回显。换实例时改三个环境变量即可，
+无需改 runner。
 
 ## 测试副作用声明
 
@@ -167,9 +174,9 @@ template/lc_collate/lc_ctype），建 A 库不能靠它（除非 template 指向
   且语义等价，`INTERSECT` 正常；三者词法层均归 READ。
 - **Oracle 读形态**：`DECODE`、`TO_CHAR(sysdate, 'YYYY-MM-DD')`、优化器提示注释
   `/*+ FULL(t) */`（提示在注释里，不触发词法关键字扫描）真库验证通过。
-- BJ4 抽验：`run_live_acompat.sh` + `LIVE_HOST=1.94.240.147
-  LIVE_PASSWORD_JSON=/repo/ops/create-bj4.json`，建库探测行为与上表一致
-  （ORA 被拒 → 'A' 成功），10/10 通过，探针库已清理。
+- 云端集中式抽验：`run_live_acompat.sh`（`LIVE_HOST` / `LIVE_PASSWORD_JSON` 指向
+  华为云集中式实例），建库探测行为与上表一致（ORA 被拒 → 'A' 成功），10/10 通过，
+  探针库已清理。
 
 ## Dify 手工冒烟清单（供人工执行）
 

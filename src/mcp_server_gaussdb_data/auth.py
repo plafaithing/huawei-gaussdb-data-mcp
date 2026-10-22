@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """HTTP 传输的 Bearer 鉴权中间件（core 没有的能力——两个 example 都在 0.0.0.0 裸奔）。
 
 - tokens 文件每次请求热读（与凭证同款轮换语义）。
@@ -11,6 +14,7 @@
 import hmac
 
 from huaweicloud_mcp_core.errors import McpToolError
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .audit import client_name
 from .client.credentials import load_tokens
@@ -20,11 +24,11 @@ _RETRY_AFTER = (b"retry-after", b"5")
 
 
 class BearerAuthMiddleware:
-    def __init__(self, app, *, tokens_file: str) -> None:
+    def __init__(self, app: ASGIApp, *, tokens_file: str) -> None:
         self.app = app
         self.tokens_file = tokens_file
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return

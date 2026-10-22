@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# SPDX-License-Identifier: MIT
+
 """元数据工具：schema / 表 / 字段浏览（全部 READ，参数化查询，标识符白名单校验）。
 
 注册模式与 tools/sql.py 一致：@guard 裸函数，由 server.build_sql_server 统一
@@ -14,8 +17,7 @@ from huaweicloud_mcp_core import ToolRisk, guard
 from huaweicloud_mcp_core.errors import McpToolError
 
 from ..client.credentials import DbCredentials
-from ..client.drivers import get_driver
-from ..service.database import _cursor
+from ..client.drivers import cursor, get_driver
 from .sql import _exec_failed, _format_rows, _pool, _settings
 
 # GaussDB 对象名允许 $（A 兼容模式，survey/03），故白名单含之；
@@ -32,13 +34,13 @@ def _validate_identifier(value: str, name: str) -> str:
     return value
 
 
-def _query(sql: str, params: tuple) -> dict[str, Any]:
+def _query(sql: str, params: tuple[str, ...]) -> dict[str, Any]:
     settings = _settings()
     creds = DbCredentials.load(settings)
     try:
         with (
             _pool(settings).read_connection(creds, settings=settings) as conn,
-            _cursor(conn) as cur,
+            cursor(conn) as cur,
         ):
             cur.execute(sql, params)
             return _format_rows(cur, settings)

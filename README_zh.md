@@ -113,6 +113,34 @@ uv run mcp_server_gaussdb_data -t streamable-http  # 远程传输
 
 Linux 上先按「前置条件」装好官方驱动 whl（`./fetch-driver.sh` 可从官方驱动包提取）。
 
+### Docker 部署（monorepo 构建）
+
+构建上下文为**仓库根**（core 由 `libs/huaweicloud_mcp_core` 源码直接安装，不依赖 PyPI 发布物）。
+官方驱动 whl 先经 `fetch-driver.sh` 落到 `server/mcp_server_gaussdb_data/wheels/`（不入库）：
+
+```bash
+cd huaweicloud-mcp
+./server/mcp_server_gaussdb_data/fetch-driver.sh /path/to/DBS-GaussDB-driver_*.tar.gz
+docker build -t mcp_server_gaussdb_data \
+  -f server/mcp_server_gaussdb_data/deploy/Dockerfile .
+```
+
+**多架构构建**：Dockerfile 按 RUN 内 `uname -m`（buildx 下即目标平台架构）挑选并校验
+`wheels/` 中的驱动 whl（两架构 whl 可并存）：
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t <registry>/mcp_server_gaussdb_data \
+  -f server/mcp_server_gaussdb_data/deploy/Dockerfile --push .
+```
+
+> **HCE 2.0 构建注意（实测）**：HCE 宿主上 `docker build` 的 RUN 步骤内 umask 为
+> 0027（安全基线），pip 产物权限 640/750 会导致镜像内非 root 用户 `import` 失败。
+> Dockerfile 已在 pip install 前显式 `umask 022`，其它发行版不受影响。
+
+运行参数（`GAUSSDB_DATA_MCP_CREDENTIALS_FILE`/`_TOKENS_FILE`/`_AUDIT_FILE`、
+`MCP_SERVER_HOST` 等）见「配置」节；nginx 443 TLS 反代模板见 `deploy/nginx.conf.example`。
+
 ## 配置
 
 ### 环境变量

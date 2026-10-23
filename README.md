@@ -126,6 +126,39 @@ uv run mcp_server_gaussdb_data -t streamable-http  # remote transport
 On Linux, put the official driver wheel in place first (see Prerequisites;
 `./fetch-driver.sh` extracts it from the official driver package).
 
+### Docker deployment (monorepo build)
+
+The build context is the **repository root** (core is installed directly from the
+`libs/huaweicloud_mcp_core` sources, no PyPI release needed). Extract the official
+driver wheel into `server/mcp_server_gaussdb_data/wheels/` (not committed) with
+`fetch-driver.sh` first:
+
+```bash
+cd huaweicloud-mcp
+./server/mcp_server_gaussdb_data/fetch-driver.sh /path/to/DBS-GaussDB-driver_*.tar.gz
+docker build -t mcp_server_gaussdb_data \
+  -f server/mcp_server_gaussdb_data/deploy/Dockerfile .
+```
+
+**Multi-arch build**: the Dockerfile picks and validates the driver wheel for the
+target arch via `uname -m` inside RUN (under buildx this is the target platform;
+wheels for both architectures may coexist in `wheels/`):
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t <registry>/mcp_server_gaussdb_data \
+  -f server/mcp_server_gaussdb_data/deploy/Dockerfile --push .
+```
+
+> **HCE 2.0 build note (verified in the field)**: on HCE hosts `docker build` RUN
+> steps inherit umask 0027 (security baseline); pip artifacts end up 640/750 and the
+> in-image non-root user cannot `import`. The Dockerfile sets `umask 022` explicitly
+> before pip install; other distros are unaffected.
+
+Runtime settings (`GAUSSDB_DATA_MCP_CREDENTIALS_FILE`/`_TOKENS_FILE`/`_AUDIT_FILE`,
+`MCP_SERVER_HOST`, ...) are covered in Configuration; the nginx 443 TLS reverse-proxy
+template lives in `deploy/nginx.conf.example`.
+
 ## Configuration
 
 ### Environment Variables

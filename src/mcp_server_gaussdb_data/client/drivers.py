@@ -176,14 +176,20 @@ class PyodbcDriver:
 
 
 def _is_auth_failure(pyodbc: Any, exc: Exception) -> bool:
-    # 认证失败判定：错误文本含 "password authentication failed"（psycopg2 轨
-    # 的 pgcode 28P01 对应 ODBC 侧的该文本）；部分版本以登录超时类错误呈现
-    # （设计口径 pyodbc.LoginTimeoutError——5.x 实无此属性，防御式探测，
-    # 驱动定义了才按类型判定，避免 AttributeError）。
+    # 认证失败判定（大小写不敏感）：psycopg2 轨的 pgcode 28P01 对应 ODBC 侧的
+    # "password authentication failed"；云上 pyodbc 轨实测（2026-10 E2E 回归）
+    # gsqlodbc 错密码报 "Invalid username/password,login denied."；部分版本以
+    # 登录超时类错误呈现（设计口径 pyodbc.LoginTimeoutError——5.x 实无此属性，
+    # 防御式探测，驱动定义了才按类型判定，避免 AttributeError）。
     login_timeout = getattr(pyodbc, "LoginTimeoutError", None)
     if login_timeout is not None and isinstance(exc, login_timeout):
         return True
-    return "password authentication failed" in str(exc).lower()
+    text = str(exc).lower()
+    return (
+        "password authentication failed" in text
+        or "login denied" in text
+        or "invalid username" in text
+    )
 
 
 def get_driver() -> Psycopg2Driver | PyodbcDriver:

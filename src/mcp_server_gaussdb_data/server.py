@@ -6,7 +6,9 @@
 组装方式：不用 core 的 build_server（它读 HUAWEICLOUD_* 且只读默认 False、
 server 名带 huaweicloud 前缀），而是直接构造 MCPServer + SqlGuardrailsMiddleware
 （core 中间件的文案针对性子类），用我们自己的 DataMcpSettings（默认只读 True、
-默认回环监听）。
+默认回环监听）。规则集在 load_rules 结果上追加内置 DANGEROUS confirm 规则：
+core 1.0.0 的确认门只由规则驱动，内置规则保证危险通道默认有确认门
+（见 _DANGEROUS_CONFIRM_RULE）。
 """
 
 import argparse
@@ -14,10 +16,11 @@ import logging
 import os
 import sys
 
+from huaweicloud_mcp_core import ToolRisk
 from huaweicloud_mcp_core.config import McpSettings
 from huaweicloud_mcp_core.errors import McpToolError
 from huaweicloud_mcp_core.guardrails.middleware import GuardrailsMiddleware
-from huaweicloud_mcp_core.guardrails.rules import load_rules
+from huaweicloud_mcp_core.guardrails.rules import Rule, load_rules
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult
 from starlette.types import ASGIApp
@@ -27,6 +30,18 @@ from .client.drivers import get_driver
 from .config import DataMcpSettings
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+# 内置 DANGEROUS confirm 规则（安全回归修复 2026-10-23）：官方 core 1.0.0 的确认门
+# 只由规则驱动（middleware._pre_check → evaluate_rules；旧 core 1.1.1 是
+# risk is DANGEROUS 无条件 confirm），load_rules 默认零规则 → execute_sql_dangerous
+# 无 confirm 直达工具体。追加本规则让规则门天然命中危险通道；confirm=true 放行与
+# 用户 YAML 规则加严（strictest_hit：block > confirm）路径不变。
+_DANGEROUS_CONFIRM_RULE = Rule(
+    id="gaussdb-data-dangerous-confirm",
+    action="confirm",
+    message="DANGEROUS (DDL) statements require explicit confirmation.",
+    risks=(ToolRisk.DANGEROUS,),
+)
 
 
 class SqlGuardrailsMiddleware(GuardrailsMiddleware):
@@ -61,7 +76,7 @@ def build_sql_server() -> MCPServer:
     )
     middleware = SqlGuardrailsMiddleware(
         read_only=settings.read_only,
-        rules=load_rules(rules_settings),
+        rules=[*load_rules(rules_settings), _DANGEROUS_CONFIRM_RULE],
         audit=SqlAuditLogger(file_path=settings.audit_file),
     )
     server = MCPServer(

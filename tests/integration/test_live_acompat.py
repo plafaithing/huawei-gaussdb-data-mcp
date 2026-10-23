@@ -127,12 +127,15 @@ class TestACompatRead:
         }
 
     async def test_empty_string_is_null(self, server):
-        # A 兼容语义：'' 即 NULL（PG 语义下是空串）。两个断言分别锁行为面：
-        # '' IS NULL 为真、SELECT '' 字面量返回 null 而非空串。
+        # A 兼容语义：'' 即 NULL（PG 语义下是空串）。行为面用 CASE WHEN 锁定——
+        # '' IS NULL 的原生布尔经两轨驱动字符串化不同（psycopg2 'True' / pyodbc '1'，
+        # 2026-10 云上 E2E 回归），语义断言不依赖布尔表示（与 fidelity 套件同款写法）。
         payload = await _call(
-            server, "execute_sql", {"query": "SELECT '' IS NULL AS empty_is_null"}
+            server,
+            "execute_sql",
+            {"query": "SELECT CASE WHEN '' IS NULL THEN 'yes' ELSE 'no' END AS empty_is_null"},
         )
-        assert payload["rows"] == [["True"]]
+        assert payload["rows"] == [["yes"]]
 
         literal = await _call(server, "execute_sql", {"query": "SELECT '' AS empty_literal"})
         assert literal["rows"] == [[None]]
@@ -193,8 +196,10 @@ class TestACompatDml:
     async def test_merge_roundtrip(self, server):
         # A 兼容 upsert 的正道：MERGE INTO（文档口径：A 模式不支持 ON CONFLICT）
         await _create_or_skip(server, _TARGET, "(id integer, val text)")
-        await _create_or_skip(server, _SOURCE, "(id integer, val text)")
         try:
+            # 第二张探测表也必须在 try 内：若它在 _TARGET 建成后 skip，
+            # 无保护的 skip 会绕过 finally，泄漏已建成的 _TARGET
+            await _create_or_skip(server, _SOURCE, "(id integer, val text)")
             await _call(
                 server,
                 "execute_sql_write",
@@ -286,14 +291,16 @@ class TestOracleSequences:
 
     async def test_sequence_advancement_blocked_by_readonly_session(self, server):
         gate = await _call(server, "execute_sql_dangerous", {"query": f"CREATE SEQUENCE {_SEQ}"})
-        assert gate.get("confirmation_required") is True  # DDL 确认门对序列同样生效
-        made = await _ddl(server, f"CREATE SEQUENCE {_SEQ} START WITH 1")
-        if made.get("error"):
-            pytest.skip(
-                f"CREATE SEQUENCE unavailable on this account: "
-                f"{made['error'].get('message', '')[:180]}"
-            )
         try:
+            # 确认门断言必须在 try/finally 内：门若回归失效，上一步会直接建成序列
+            # 而断言失败跳过清理——泄漏 _SEQ（与 test_dml_roundtrip 同款防护）
+            assert gate.get("confirmation_required") is True
+            made = await _ddl(server, f"CREATE SEQUENCE {_SEQ} START WITH 1")
+            if made.get("error"):
+                pytest.skip(
+                    f"CREATE SEQUENCE unavailable on this account: "
+                    f"{made['error'].get('message', '')[:180]}"
+                )
             for sql in (
                 f"SELECT {_SEQ}.NEXTVAL FROM DUAL",  # Oracle 属性形态
                 f"SELECT nextval('{_SEQ}')",  # PG 函数形态
@@ -311,7 +318,8 @@ class TestOracleSequences:
             # CURRVAL 未被只读会话拦（本就只读），报的是会话内 currval undefined
             assert "currval" in currval["error"]["message"].lower()
         finally:
-            await _ddl(server, f"DROP SEQUENCE {_SEQ}")
+            # IF EXISTS：skip 路径（序列未建成）也要能安全清到
+            await _ddl(server, f"DROP SEQUENCE IF EXISTS {_SEQ}")
 
 
 class TestOracleSetOperators:
@@ -336,8 +344,9 @@ class TestOracleSetOperators:
 
     async def test_minus_and_intersect(self, server):
         await _create_or_skip(server, _MINUS_T1, "(v integer)")
-        await _create_or_skip(server, _MINUS_T2, "(v integer)")
         try:
+            # 同 test_merge_roundtrip：第二张表的 skip 不得绕过已建表的清理
+            await _create_or_skip(server, _MINUS_T2, "(v integer)")
             await _call(
                 server,
                 "execute_sql_write",

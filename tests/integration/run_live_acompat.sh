@@ -41,14 +41,15 @@ if [ -d /repo ]; then
   CRED=/tmp/live-credentials.json
   ACRED=/tmp/live-credentials-acompat.json
 
-  # --- 1) 系统依赖 + Python 依赖（同 run_live.sh） ---
+  # --- 1) 系统依赖 + Python 依赖（同 run_live.sh：addopts 带 --cov，插件必装 +
+  #        pytest 追加 --no-cov，容器轨 site-packages 安装下覆盖率无意义） ---
   sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
   apt-get update -qq
   apt-get install -y -qq --no-install-recommends libkeyutils1 libsasl2-2 libldap-common >/dev/null
   pip install --no-cache-dir -q -i "$TUNA" "mcp==2.3.0" "sqlparse==0.6.0" "pydantic==2.14.0"
   pip install --no-cache-dir -q -i "$TUNA" "$CORE_DIR"
   pip install --no-cache-dir -q --no-index "$DRIVER_WHL"
-  pip install --no-cache-dir -q -i "$TUNA" "pytest==9.1.1" "pytest-asyncio==1.4.0"
+  pip install --no-cache-dir -q -i "$TUNA" "pytest==9.1.1" "pytest-asyncio==1.4.0" "pytest-cov==7.1.0"
   pip install --no-cache-dir -q -i "$TUNA" "$SERVER_DIR"
 
   SITE=$(python -c 'import site; print(site.getsitepackages()[0])')
@@ -83,7 +84,7 @@ os.chmod("/tmp/live-credentials.json", 0o600)
 
   # --- 4) A 库专项测试（凭证指向 _acompat_probe） ---
   GAUSSDB_DATA_MCP_ACOMPAT_CREDENTIALS_FILE="$ACRED" \
-    python -m pytest tests/integration/test_live_acompat.py -m live -v -p no:cacheprovider
+    python -m pytest tests/integration/test_live_acompat.py -m live -v -p no:cacheprovider --no-cov
 
   # --- 5) 清理探测库 ---
   GAUSSDB_DATA_MCP_CREDENTIALS_FILE="$CRED" \

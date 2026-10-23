@@ -70,10 +70,25 @@ class TestReadOnlyDefault:
         schemas = {row[0] for row in payload["rows"]}
         # survey 备案项（实测 507.0.0）：schemata 返回系统 schema（dbe_* / pkg_* /
         # rds* / sqladvisor 等）+ information_schema + pg_catalog + public；
-        # 初始账号是 root，$user 解析为 root schema（search_path="$user",public），
         # 并不存在名为 postgres 的 schema。
         assert {"public", "information_schema", "pg_catalog"} <= schemas
-        assert "root" in schemas
+        # $user schema（search_path 首位，与登录账号同名）存在时必须被列出：
+        # 云上初始账号 root 的同名 schema 存在（507 实测）；本地容器轨用最小权限
+        # 业务账号，可能无同名 schema——存在性以 pg_namespace 前置查询为准
+        # （count 字符串化 "0"/"1" 两轨一致，布尔则 psycopg2 'True' / pyodbc '1'）。
+        mine = await _call(
+            server,
+            "execute_sql",
+            {
+                "query": (
+                    "SELECT current_user, "
+                    "(SELECT count(*) FROM pg_namespace WHERE nspname = current_user)"
+                )
+            },
+        )
+        user, own_schema_count = mine["rows"][0]
+        if own_schema_count != "0":
+            assert user in schemas
 
     async def test_list_tables_real(self, server):
         payload = await _call(server, "list_tables", {"schema": "public"})
@@ -96,10 +111,14 @@ class TestReadOnlyDefault:
 
     async def test_explain_real(self, server):
         payload = await _call(server, "explain_sql", {"query": "SELECT 1"})
-        # 实测 GaussDB 507：EXPLAIN 结果列名是 "====== Query Others ====="，
-        # 计划行如 "Parameterize: Yes, parameterized sql: SELECT ?"——
-        # 非 PG 的 "QUERY PLAN"；用不区分大小写的包含匹配兼容两种风格。
-        assert any("query" in col.lower() for col in payload["columns"]), payload["columns"]
+        # EXPLAIN 输出形态随驱动与部署而异（2026-10 云上 E2E 回归 + 本地容器实测），
+        # 已观测三种形态，断言只锁共同契约（有列、有行、首行数据非空、无行截断），
+        # 不假设具体列名/列数——列名是驱动的产物，不是本服务的契约：
+        # - psycopg2 轨（本地容器 507.0.0）：单列 "====== Query Others ====="
+        #   （GaussDB 风格），计划行如 "Parameterize: Yes, parameterized sql: ..."；
+        # - pyodbc 轨 gsqlodbc（本地容器 507.0.0）：单列 "QUERY PLAN"（PG 风格）；
+        # - pyodbc 轨 gsqlodbc（云实例）：结构化 5 列 id/operation/E-rows/E-width/E-costs。
+        assert payload["columns"], payload["columns"]
         assert payload["row_count"] >= 1
         assert payload["rows"][0][0]
         assert payload["truncated"] is False
@@ -136,9 +155,12 @@ class TestWriteChannels:
 
         # 1) DANGEROUS 无 confirm → confirmation_required 信封（表尚未建）
         first = await _call(server, "execute_sql_dangerous", {"query": create})
-        assert first["confirmation_required"] is True
-
         try:
+            # 断言必须在 try/finally 保护内：确认门若回归失效，上一步会直接建表
+            # 成功而本断言失败——无保护时清理被跳过，探针表泄漏进目标库
+            # （2026-10 云上 E2E 实测，_mcp_live_probe 泄漏后手动 DROP）
+            assert first["confirmation_required"] is True
+
             # 2) confirm=true → 建表成功（DDL rowcount 因驱动而异，只断言形状）
             made = await _call(server, "execute_sql_dangerous", {"query": create, "confirm": True})
             assert made["statement_kind"] == "CREATE"

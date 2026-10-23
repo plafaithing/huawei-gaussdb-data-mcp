@@ -46,10 +46,13 @@ if [ -d /repo ]; then
   apt-get install -y -qq --no-install-recommends libkeyutils1 libsasl2-2 libldap-common curl >/dev/null
 
   # --- 2) Python 依赖：先钉 mcp 基线版本，再装仓库内 core 源码 → 驱动 whl → 项目 → pytest ---
+  # pytest-cov：项目 pyproject 的 addopts 带 --cov（官方 09 §9.3 标准），pytest 启动
+  # 即需要该插件，缺了直接 unrecognized arguments 报错；容器内跑 --no-cov（见下），
+  # 这里补装是双保险（插件缺失与覆盖率统计两个故障面分开消除）。
   pip install --no-cache-dir -q -i "$TUNA" "mcp==2.3.0" "sqlparse==0.6.0" "pydantic==2.14.0"
   pip install --no-cache-dir -q -i "$TUNA" "$CORE_DIR"
   pip install --no-cache-dir -q --no-index "$DRIVER_WHL"
-  pip install --no-cache-dir -q -i "$TUNA" "pytest==9.1.1" "pytest-asyncio==1.4.0" "uvicorn==0.54.0"
+  pip install --no-cache-dir -q -i "$TUNA" "pytest==9.1.1" "pytest-asyncio==1.4.0" "pytest-cov==7.1.0" "uvicorn==0.54.0"
   pip install --no-cache-dir -q -i "$TUNA" "$SERVER_DIR"
 
   # 驱动 .so 的运行时搜索路径
@@ -75,10 +78,12 @@ os.chmod("/tmp/live-credentials.json", 0o600)
 '
 
   # --- 4) 真库 live 测试（repo 挂载只读：禁 pyc/pytest cache） ---
+  # --no-cov 覆盖 addopts 的 --cov：包以 site-packages 方式安装，--cov=src 会测出
+  # 0% 并触发 cov-fail-under=80 误报；容器轨不做覆盖率统计。
   cd "$SERVER_DIR"
   export PYTHONDONTWRITEBYTECODE=1
   GAUSSDB_DATA_MCP_CREDENTIALS_FILE="$CRED" \
-    python -m pytest tests/integration -m live -v -p no:cacheprovider
+    python -m pytest tests/integration -m live -v -p no:cacheprovider --no-cov
 
   # --- 5) streamable-http 冒烟：Bearer 鉴权 + initialize ---
   printf '%s\n' '{"tokens": {"smoke": "tok_live_1"}}' > "$TOKENS"

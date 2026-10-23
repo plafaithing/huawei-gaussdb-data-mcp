@@ -212,6 +212,18 @@ def test_pyodbc_auth_failed_by_password_text():
     assert exc.value.code == "GAUSSDB_DATA_MCP_AUTH_FAILED"
 
 
+def test_pyodbc_auth_failed_by_gsqlodbc_login_denied_text():
+    # 云上 pyodbc 轨实测（2026-10 E2E 回归）：gsqlodbc 错密码的报错文案是
+    # "Invalid username/password,login denied."，不是 psycopg2 系的
+    # "password authentication failed"——漏判会被归为 CONNECT_FAILED，
+    # 「连错 10 次锁号 1 天、绝不重试」的警示 hint 随之丢失
+    mod, _ = _fake_pyodbc()
+    mod.connect = MagicMock(side_effect=mod.Error("28000: Invalid username/password,login denied."))
+    with patch.dict(sys.modules, {"pyodbc": mod}), pytest.raises(McpToolError) as exc:
+        PyodbcDriver().connect(CREDS, SETTINGS)
+    assert exc.value.code == "GAUSSDB_DATA_MCP_AUTH_FAILED"
+
+
 def test_pyodbc_auth_failed_by_login_timeout():
     # 设计口径：部分版本认证失败以登录超时类错误呈现（LoginTimeoutError）
     mod, _ = _fake_pyodbc()

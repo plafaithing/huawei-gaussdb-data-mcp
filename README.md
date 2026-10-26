@@ -201,12 +201,17 @@ SQL_CHAR 按 UTF-8 解码；另加 `LFConversion=0`（gsqlodbc 派生自 psqlODB
 `GAUSSDB_DATA_MCP_PYODBC_LIVE=1` 与 `DB_*` 环境变量另有单驱动轨中文往返），
 未设门时自动跳过。
 
-**verify-ca / verify-full 的轨道差异**：pyodbc 轨要求 `sslrootcert` 显式配置
-（credentials.json 或 `GAUSSDB_DATA_MCP_DB_SSLROOTCERT`，建议绝对路径），缺失即拒绝
-连接（`GAUSSDB_DATA_MCP_CA_MISSING`，fail-closed）；证书路径以 `SSLRootCert={...}`
-形式透传给驱动。注意：gsqlodbc 对该参数是否真实执行 CA 校验**未经实测证实**（本地
-验证仅确认参数被驱动接受），确需 CA 校验的生产环境优先 psycopg2 轨（Linux）或
-Docker 轨（§6.3）。
+**verify-ca / verify-full 的轨道差异（2026-10-23 云上实测结论）**：
+- **psycopg2 轨（Linux/Docker）：verify-ca 完全可用**——真实 CA（控制台下载 ca.pem）
+  连接成功、篡改 CA 被拒绝（探针 `ops/verify_ca_probe.py`，云实例实测）。
+- **pyodbc 轨（Windows）：verify-ca 当前不可用**——gsqlodbc 507.0 B071 在 Windows 上
+  无法定位 root 证书（连接串 `SSLRootCert`/`RootCert`/`sslrootcert` 关键字、
+  `PGSSLROOTCERT` 环境变量、`~/.postgresql/root.crt` 惯例位置、`HOME` 显式设置
+  全部无效，恒报 `could not get home directory to locate root certificate file`，
+  华为驱动缺陷）。fail-closed 兜底：verify-ca/verify-full 且无显式 `sslrootcert`
+  → 启动即拒绝（`GAUSSDB_DATA_MCP_CA_MISSING`）；即便配了证书，gsqlodbc 也不校验。
+  **Windows 轨生产配置用 `sslmode=require`（加密不校验 CA）；确需 CA 校验走
+  psycopg2 轨（Linux）或 Docker 轨**。该缺陷建议向华为反馈。
 
 **已知问题（已规避）**：Windows 上 GaussDB ODBC DLL 在进程退出的清理阶段触发
 堆损坏（exit code `0xC0000374` / `-1073740940`，驱动已知问题，**不影响运行期
@@ -654,6 +659,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/gaussdb-dat
 | 驱动 import 成功但加载即崩 | `LD_LIBRARY_PATH` 未指向 `.../site-packages/gaussdb_psycopg2.lib`，或缺 `libkeyutils1`/`libsasl2-2`/`libldap-common` |
 | `GAUSSDB_DATA_MCP_INSECURE_PUBLIC` | 公网地址 + 弱 sslmode 的 fail-closed 护栏：凭证改 `sslmode=require`/`verify-ca`，或换 VPC 内网地址 |
 | `GAUSSDB_DATA_MCP_CA_MISSING` | `verify-ca`/`verify-full` 未找到 CA 证书：把控制台下载的 `cacert.pem` 放到 credentials.json 同目录（hint 给出期望绝对路径），或用 `sslrootcert` 显式指定 |
+| pyodbc 轨 `verify-ca` + `sslrootcert` 路径写错 → 连接被拒，报 `could not get home directory...`（还可能附 "change sslmode to disable server certificate verification" 建议） | gsqlodbc 的内部文案缺陷（不改代码）：报错**不含证书路径**，"home directory" 与证书无关，按它排查会走偏。排查步骤：① 确认 credentials.json 的 `sslrootcert` 是**绝对路径**且文件存在（服务层只在"完全没配"时拦 `CA_MISSING`，配了假路径会直达驱动）；② 先临时改回 `sslmode=require` 验证连接链路本身通不通，再单独修证书路径 |
 | `MCP_CREDENTIAL_ERROR` | 凭证/tokens 文件缺失、JSON 非法、权限非 0600、token 含非 ASCII 字符；原子替换为合法文件即可 |
 | HTTP 全部 401 | token 不匹配或 scheme 写错（scheme 大小写不敏感，token 本身区分大小写） |
 | HTTP 突然全部 503 | tokens 文件处于损坏/缺失状态（如替换到一半）：检查文件，`Retry-After: 5` 后重试 |

@@ -184,6 +184,17 @@ credentials.json 字段：`host`、`port`、`dbname`、`user`、`password`、`ss
 （可选 `sslrootcert` / `sslcert` / `sslkey`）。示例见 `credentials.example.json` 与
 `tokens.example.json`。
 
+**host 支持三种部署网络形态**（按企业网络环境选择）：
+
+| 形态 | host 填法 | 公网暴露 |
+|---|---|---|
+| VPC 内 / ECS 部署 | 数据库**内网 IP**（192.168.x.x）或实例域名 | 数据库零公网 |
+| **专线/云下打通** | 数据库**内网 IP**（专线内网互通，推荐企业场景） | 数据库零公网且零 EIP |
+| 公网直连 | 数据库 **EIP**（sslmode 必须 ≥ require，见护栏） | 有公网（强制 SSL 兜底） |
+
+专线场景下内网 IP 不随 EIP 回收变化，天然规避 EIP 变更断连问题；MCP 可部署云上
+ECS 或客户本地（经专线连库），两种拓扑均零公网暴露。
+
 ### 保护名单盲区
 
 护栏规则匹配的是**工具参数**：工具入参里的资源 ID、名称类参数与显式标签。本服务

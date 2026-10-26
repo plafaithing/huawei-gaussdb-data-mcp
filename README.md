@@ -200,6 +200,17 @@ variables; the file wins when both are set.
 | `GAUSSDB_DATA_MCP_DB_SSLKEY` | No | Client key (gs_hba cert authentication) | empty |
 
 credentials.json fields: `host`, `port`, `dbname`, `user`, `password`, `sslmode`
+**Three deployment network topologies for `host`** (choose per enterprise network):
+
+| Topology | host value | Public exposure |
+|---|---|---|
+| VPC-internal / ECS | DB **private IP** (192.168.x.x) or instance domain | none |
+| **Dedicated line / hybrid** | DB **private IP** (intranet reachable via Direct Connect; recommended for enterprises) | none, and no EIP at all |
+| Public direct | DB **EIP** (sslmode >= require enforced by guardrail) | public (SSL enforced) |
+
+Dedicated-line topology keeps the intranet IP stable across EIP recycling, eliminating
+the EIP-change disconnect issue entirely; both MCP-on-cloud and MCP-on-premises
+topologies expose zero public surface for the database.
 (plus optional `sslrootcert` / `sslcert` / `sslkey`). See
 `credentials.example.json` and `tokens.example.json`.
 

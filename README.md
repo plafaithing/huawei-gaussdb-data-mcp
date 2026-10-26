@@ -551,7 +551,20 @@ nginx 参考配置 `deploy/nginx.conf.example`（`proxy_buffering off` 是 strea
 流式必需）。MCP 与 DB 间也建议开 SSL（`sslmode=verify-ca`，`cacert.pem` 放
 credentials.json 同目录即可，见 §3.2）。
 
-### 6.2 模式 2（客户场景）：DB 绑 EIP 公网直连
+### 6.2 模式 1 变体：专线/云下打通（企业推荐，数据库零公网 + 零 EIP）
+
+客户本地数据中心与 VPC 通过**云专线（Direct Connect）/ VPN 网关**打通后，MCP 与
+数据库均在云上（或 MCP 部署客户本地），全部走内网：
+
+- `credentials.json` 的 host 直接填数据库**内网 IP**（192.168.x.x）——不创建 EIP，
+  数据库在互联网上不可见也不可达；
+- **EIP 变更自愈问题天然消失**（内网 IP 不随 EIP 回收变化，见 §8 排障）；
+- agent 经专线访问 MCP 的内网地址（streamable-http + Bearer），或 MCP 与 agent
+  同侧部署经专线连库——两种拓扑均零公网暴露；
+- 传输加密建议 `sslmode=verify-ca`（psycopg2 轨实测支持；Windows pyodbc 轨见 §3.2
+  轨道差异）。
+
+### 6.3 模式 2（客户场景）：DB 绑 EIP 公网直连
 
 客户把 GaussDB 绑 EIP、MCP 在任意位置直连。本服务的强制护栏：
 
@@ -560,7 +573,7 @@ credentials.json 同目录即可，见 §3.2）。
 - 安全组把 8000 端口限制到 MCP 出口 IP（不要 0.0.0.0/0）；
 - 警示公网爆破面：密码错 10 次锁号 1 天会造成 DoS，务必限源。
 
-### 6.3 Docker 部署
+### 6.4 Docker 部署
 
 ```bash
 # 构建前：把官方自研驱动 whl 放进 wheels/——推荐 ./fetch-driver.sh <官方驱动包>
@@ -598,7 +611,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/gaussdb-dat
 > umask 为 0027（安全基线），pip 产物会带 640/750 权限，导致镜像内非 root 用户
 > `import` 失败。Dockerfile 已在 pip install 前显式 `umask 022`，其它发行版不受影响。
 
-### 6.4 审计日志
+### 6.5 审计日志
 
 `GAUSSDB_DATA_MCP_AUDIT_FILE` 指定的 JSONL 文件（同时写 stderr），每次工具调用一行：
 

@@ -78,7 +78,7 @@ async def list_tables(schema: str = "public") -> dict[str, Any]:
 
 @guard(risk=ToolRisk.READ)
 async def describe_table(schema: str, table: str) -> dict[str, Any]:
-    """Describe columns of a table: name, type, nullability, default.
+    """Describe columns of a table: name, type, nullability, default, comment.
 
     Scenario: understand column semantics before writing SQL.
 
@@ -91,8 +91,13 @@ async def describe_table(schema: str, table: str) -> dict[str, Any]:
     ph = get_driver().placeholder()
     return await asyncio.to_thread(
         _query,
-        f"SELECT column_name, data_type, is_nullable, column_default "
-        f"FROM information_schema.columns "
-        f"WHERE table_schema = {ph} AND table_name = {ph} ORDER BY ordinal_position",
+        # 列注释存在 pg_description（与 information_schema 分离），经 col_description
+        # 按 (表 oid, 序号) 取——驱动无关，GaussDB 507 本地与云实例均实测可用
+        f"SELECT c.column_name, c.data_type, c.is_nullable, c.column_default, "
+        f"col_description(pc.oid, c.ordinal_position) AS column_comment "
+        f"FROM information_schema.columns c "
+        f"JOIN pg_class pc ON pc.relname = c.table_name "
+        f"JOIN pg_namespace pn ON pn.oid = pc.relnamespace AND pn.nspname = c.table_schema "
+        f"WHERE c.table_schema = {ph} AND c.table_name = {ph} ORDER BY c.ordinal_position",
         (schema, table),
     )

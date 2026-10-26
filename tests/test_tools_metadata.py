@@ -98,13 +98,20 @@ async def test_list_tables_parameterized(pool_factory, fake_db_creds):
 
 async def test_describe_table_parameterized(pool_factory, fake_db_creds):
     calls = pool_factory(
-        [("id", "integer", "NO", None)],
-        (("column_name",), ("data_type",), ("is_nullable",), ("column_default",)),
+        [("id", "integer", "NO", None, None)],
+        (
+            ("column_name",),
+            ("data_type",),
+            ("is_nullable",),
+            ("column_default",),
+            ("column_comment",),
+        ),
     )
     result = await meta.describe_table(schema="public", table="orders")
-    assert result["rows"] == [["id", "integer", "NO", None]]
+    assert result["rows"] == [["id", "integer", "NO", None, None]]
     assert calls[0][1] == ("public", "orders")
-    assert "table_schema = %s AND table_name = %s" in calls[0][0]
+    assert "c.table_schema = %s AND c.table_name = %s" in calls[0][0]
+    assert "col_description" in calls[0][0]  # 列注释（issue 清单 #2）
 
 
 async def test_list_tables_pyodbc_placeholder(pool_factory, fake_db_creds, monkeypatch):

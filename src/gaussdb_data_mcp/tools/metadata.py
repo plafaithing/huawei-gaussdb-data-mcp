@@ -32,9 +32,9 @@ def _validate_identifier(value: str, name: str) -> str:
     return value
 
 
-def _query(sql: str, params: tuple) -> dict[str, Any]:
+def _query(sql: str, params: tuple, instance: str | None = None) -> dict[str, Any]:
     settings = _settings()
-    creds = DbCredentials.load(settings)
+    creds = DbCredentials.load(settings, instance)
     try:
         with _pool(settings).read_connection(creds, settings=settings) as conn:
             with _cursor(conn) as cur:
@@ -47,18 +47,18 @@ def _query(sql: str, params: tuple) -> dict[str, Any]:
 
 
 @guard(risk=ToolRisk.READ)
-async def list_schemas() -> dict[str, Any]:
+async def list_schemas(instance: str | None = None) -> dict[str, Any]:
     """List database schemas visible to the MCP account.
 
     Scenario: discover the schema layout before picking tables.
     """
     return await asyncio.to_thread(
-        _query, "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name", ()
+        _query, "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name", (), instance
     )
 
 
 @guard(risk=ToolRisk.READ)
-async def list_tables(schema: str = "public") -> dict[str, Any]:
+async def list_tables(schema: str = "public", instance: str | None = None) -> dict[str, Any]:
     """List tables and views in a schema.
 
     Scenario: find candidate tables for a query.
@@ -72,12 +72,12 @@ async def list_tables(schema: str = "public") -> dict[str, Any]:
         _query,
         f"SELECT table_name, table_type FROM information_schema.tables "
         f"WHERE table_schema = {ph} ORDER BY table_name",
-        (schema,),
+        (schema,), instance,
     )
 
 
 @guard(risk=ToolRisk.READ)
-async def describe_table(schema: str, table: str) -> dict[str, Any]:
+async def describe_table(schema: str, table: str, instance: str | None = None) -> dict[str, Any]:
     """Describe columns of a table: name, type, nullability, default, comment.
 
     Scenario: understand column semantics before writing SQL.
@@ -99,5 +99,5 @@ async def describe_table(schema: str, table: str) -> dict[str, Any]:
         f"JOIN pg_class pc ON pc.relname = c.table_name "
         f"JOIN pg_namespace pn ON pn.oid = pc.relnamespace AND pn.nspname = c.table_schema "
         f"WHERE c.table_schema = {ph} AND c.table_name = {ph} ORDER BY c.ordinal_position",
-        (schema, table),
+        (schema, table), instance,
     )

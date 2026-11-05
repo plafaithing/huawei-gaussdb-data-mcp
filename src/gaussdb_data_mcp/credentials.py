@@ -13,6 +13,7 @@ import ipaddress
 import json
 import os
 import stat
+import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,26 @@ def _is_public_host(host: str) -> bool:
     return not (addr.is_loopback or addr.is_private or addr.is_link_local or addr.is_reserved)
 
 
+_REGION_ALIAS = {
+    "北京四": "cn-north-4", "华北-北京四": "cn-north-4",
+    "贵阳一": "cn-southwest-2", "西南-贵阳一": "cn-southwest-2",
+    "上海一": "cn-east-3", "华东-上海一": "cn-east-3",
+    "上海二": "cn-east-2", "华东-上海二": "cn-east-2",
+    "广州": "cn-south-1", "华南-广州": "cn-south-1",
+    "广州-友好用户环境": "cn-south-4", "华南-广州-友好用户环境": "cn-south-4",
+    "深圳": "cn-south-2", "华南-深圳": "cn-south-2",
+    "香港": "ap-southeast-1", "新加坡": "ap-southeast-3",
+    "曼谷": "ap-southeast-2", "东京": "ap-southeast-4",
+    "首尔": "ap-southeast-5", "莫斯科": "ru-north-4",
+}
+
+
+def normalize_region(region: str | None) -> str:
+    """中文区域名 → region code；未知值原样返回（已是 code 的情况）。"""
+    value = (region or "").strip()
+    return _REGION_ALIAS.get(value, value)
+
+
 @dataclass(frozen=True)
 class DbCredentials:
     host: str
@@ -86,6 +107,7 @@ class DbCredentials:
     das_project_id: str = ""
     das_region: str = "cn-north-4"
     das_schema: str = "public"
+    instance_id: str = ""
 
     @property
     def connect_kwargs(self) -> dict[str, Any]:
@@ -99,42 +121,88 @@ class DbCredentials:
         return kwargs
 
     @classmethod
-    def _load_das(cls, pick, settings: DataMcpSettings) -> "DbCredentials":
-        """das 轨：无需 host/port；必需 das_connection_id/ak/sk/project_id（survey/07）。"""
-        creds = cls(
-            host="", port=0,
-            dbname=pick("dbname", settings.db_dbname) or "postgres",
-            user=pick("user", settings.db_user),
-            password=pick("password", settings.db_password),
-            das_connection_id=pick("das_connection_id", "") or "",
-            das_ak=pick("ak", "") or os.environ.get("GAUSSDB_DATA_MCP_CLOUD_AK", ""),
-            das_sk=pick("sk", "") or os.environ.get("GAUSSDB_DATA_MCP_CLOUD_SK", ""),
-            das_project_id=pick("project_id", "") or os.environ.get("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID", ""),
-            das_region=pick("region", "") or os.environ.get("GAUSSDB_DATA_MCP_CLOUD_REGION", "cn-north-4"),
-            das_schema=pick("schema", "") or "public",
-        )
+    def _load_das(cls, pick, settings: DataMcpSettings, instance: str | None) -> "DbCredentials":
+        """das 轨 v2：多实例映射（survey/07 §8）；兼容 v1 平铺结构。
+
+        v2 结构：{ak, sk, region, default_instance, instances: {iid: {das_connection_id,
+        dbname, schema, user, password, region?}}}。project_id 可省略（das 轨按
+        AK/SK+region 自动查询）。connection_id 缺失但条目有 user/password 时允许
+        自动注册（das 轨执行前补注册）。
+        """
+        secret = _read_secret_file(settings.credentials_file) if settings.credentials_file else {}
+        instances = secret.get("instances") if isinstance(secret.get("instances"), dict) else None
+
+        def env_or(name: str) -> str:
+            return os.environ.get(name, "")
+
+        if instances:
+            ak = pick("ak", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_AK")
+            sk = pick("sk", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_SK")
+            region = normalize_region(pick("region", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_REGION")) or "cn-north-4"
+            iid = (instance or pick("default_instance", "") or "").strip()
+            if not iid:
+                if len(instances) == 1:
+                    iid = next(iter(instances))
+                else:
+                    raise McpToolError(
+                        "MCP_CREDENTIAL_ERROR",
+                        "Multiple DAS instances configured; pass 'instance' or set default_instance.",
+                        hint=f"Configured instances: {', '.join(sorted(instances))}.",
+                    )
+            entry = instances.get(iid)
+            if not isinstance(entry, dict):
+                raise McpToolError(
+                    "MCP_CREDENTIAL_ERROR",
+                    f"DAS instance '{iid}' is not configured.",
+                    hint=f"Configured instances: {', '.join(sorted(instances))}.",
+                )
+            entry_pick = lambda k, default: (  # noqa: E731
+                str(entry[k]) if entry.get(k) is not None else default
+            )
+            creds = cls(
+                host="", port=0, instance_id=iid,
+                dbname=entry_pick("dbname", "postgres"),
+                user=entry_pick("user", pick("user", settings.db_user) or ""),
+                password=entry_pick("password", pick("password", settings.db_password) or ""),
+                das_connection_id=entry_pick("das_connection_id", ""),
+                das_ak=ak, das_sk=sk,
+                das_project_id=pick("project_id", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
+                das_region=normalize_region(entry_pick("region", region)) or region,
+                das_schema=entry_pick("schema", "public"),
+            )
+        else:
+            creds = cls(
+                host="", port=0, instance_id=pick("instance_id", "") or "",
+                dbname=pick("dbname", settings.db_dbname) or "postgres",
+                user=pick("user", settings.db_user),
+                password=pick("password", settings.db_password),
+                das_connection_id=pick("das_connection_id", "") or "",
+                das_ak=pick("ak", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_AK"),
+                das_sk=pick("sk", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_SK"),
+                das_project_id=pick("project_id", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
+                das_region=normalize_region(pick("region", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_REGION")) or "cn-north-4",
+                das_schema=pick("schema", "") or "public",
+            )
         missing = [
-            k for k, v in (
-                ("das_connection_id", creds.das_connection_id), ("ak", creds.das_ak),
-                ("sk", creds.das_sk), ("project_id", creds.das_project_id),
-            ) if not v
+            k for k, v in (("ak", creds.das_ak), ("sk", creds.das_sk), ("region", creds.das_region))
+            if not v
         ]
         if missing:
             raise McpToolError(
                 "MCP_CREDENTIAL_ERROR",
                 f"Missing DAS credentials: {', '.join(missing)}.",
-                hint="Register via DAS RegisterDbUser, then set das_connection_id/ak/sk/project_id "
-                     "in the credentials file (or GAUSSDB_DATA_MCP_CLOUD_* variables).",
+                hint="Set ak/sk/region in the credentials file or GAUSSDB_DATA_MCP_CLOUD_* variables.",
             )
         canonical = json.dumps(
             {"conn": creds.das_connection_id, "project": creds.das_project_id,
-             "region": creds.das_region, "db": creds.dbname, "schema": creds.das_schema},
+             "region": creds.das_region, "db": creds.dbname, "schema": creds.das_schema,
+             "instance": creds.instance_id},
             sort_keys=True,
         )
         return replace(creds, fingerprint=hashlib.sha256(canonical.encode()).hexdigest()[:16])
 
     @classmethod
-    def load(cls, settings: DataMcpSettings) -> "DbCredentials":
+    def load(cls, settings: DataMcpSettings, instance: str | None = None) -> "DbCredentials":
         secret = _read_secret_file(settings.credentials_file) if settings.credentials_file else {}
 
         def pick(file_key: str, env_value: Any) -> Any:
@@ -142,7 +210,7 @@ class DbCredentials:
             return str(value) if value is not None else env_value
 
         if settings.driver == "das":
-            return cls._load_das(pick, settings)
+            return cls._load_das(pick, settings, instance)
         try:
             port = int(pick("port", settings.db_port) or 0)
         except (TypeError, ValueError):
@@ -198,6 +266,43 @@ class DbCredentials:
                 )
         canonical = json.dumps(creds.connect_kwargs, sort_keys=True)
         return replace(creds, fingerprint=hashlib.sha256(canonical.encode()).hexdigest()[:16])
+
+
+def save_das_connection(path: str, instance_id: str, connection_id: str,
+                        dbname: str | None = None) -> None:
+    """把 RegisterDbUser 产物原子写回 credentials.json（v2 instances 结构；0600 保持）。
+
+    v1 平铺结构遇到时升级为 v2（把平铺 das_connection_id 迁入 instances）。调用方负责
+    处理并发（MCP 单进程内由调用点加锁）；每次调用重读文件（与热轮换兼容）。
+    """
+    secret: dict[str, Any] = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            secret = json.load(f)
+    except FileNotFoundError:
+        pass
+    if not isinstance(secret.get("instances"), dict):
+        legacy_conn = secret.get("das_connection_id")
+        secret["instances"] = {}
+        if legacy_conn and secret.get("instance_id"):
+            secret["instances"][str(secret["instance_id"])] = {"das_connection_id": legacy_conn}
+    instances = secret.setdefault("instances", {})
+    entry = instances.setdefault(str(instance_id), {})
+    entry["das_connection_id"] = str(connection_id)
+    if dbname:
+        entry["dbname"] = dbname
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)) or ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(secret, f, ensure_ascii=False, indent=1)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def load_tokens(path: str) -> dict[str, str]:

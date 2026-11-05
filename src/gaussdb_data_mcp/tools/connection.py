@@ -9,7 +9,10 @@ get_database_connection_info）。
 import asyncio
 from typing import Any
 
+from dataclasses import replace as _dc_replace
+
 from huaweicloud_mcp_core import ToolRisk, guard
+from huaweicloud_mcp_core.errors import McpToolError
 
 from ..credentials import DbCredentials
 from ..drivers import get_driver
@@ -17,7 +20,7 @@ from .sql import _pool, _settings
 
 
 @guard(risk=ToolRisk.READ)
-async def is_database_connected() -> dict[str, Any]:
+async def is_database_connected(instance: str | None = None) -> dict[str, Any]:
     """Check whether a database connection can be established right now.
 
     Scenario: verify connectivity and credentials before running real queries.
@@ -30,7 +33,7 @@ async def is_database_connected() -> dict[str, Any]:
     def _probe() -> dict[str, Any]:
         settings = _settings()
         driver = get_driver()
-        creds = DbCredentials.load(settings)
+        creds = DbCredentials.load(settings, instance)
         pool = _pool(settings)
         state: dict[str, Any] = {
             "connected": False,
@@ -51,7 +54,7 @@ async def is_database_connected() -> dict[str, Any]:
 
 
 @guard(risk=ToolRisk.READ)
-async def get_connection_info() -> dict[str, Any]:
+async def get_connection_info(instance: str | None = None) -> dict[str, Any]:
     """Report cached connection-pool state and non-sensitive connection context.
 
     Scenario: inspect how many pooled connections are idle, which driver is in
@@ -61,7 +64,7 @@ async def get_connection_info() -> dict[str, Any]:
 
     def _info() -> dict[str, Any]:
         settings = _settings()
-        creds = DbCredentials.load(settings)
+        creds = DbCredentials.load(settings, instance)
         pool = _pool(settings)
         return {
             "pool_free": pool.free_count(),
@@ -76,3 +79,43 @@ async def get_connection_info() -> dict[str, Any]:
         }
 
     return await asyncio.to_thread(_info)
+
+
+@guard(risk=ToolRisk.WRITE)
+async def register_das_connection(instance_id: str, username: str, password: str,
+                                  database_name: str | None = None) -> dict[str, Any]:
+    """Register a DAS connection (RegisterDbUser, datastore_type=gaussdbv5) and persist
+    the returned connection id into credentials.json (survey/07 §6/§8).
+
+    Scenario: first-time setup per instance. Afterwards execute tools only need the
+    instance id. The password is handed to DAS once; the execution path never uses it
+    (it stays in the credentials file only if provided, for auto-register/self-heal).
+
+    Args:
+        instance_id: GaussDB instance ID.
+        username: Database account (prefer a least-privilege account).
+        password: Database password (single-time input; audit side masks it).
+        database_name: Optional default database; postgres when omitted.
+    """
+
+    def _reg() -> dict[str, Any]:
+        settings = _settings()
+        if settings.driver != "das":
+            raise McpToolError(
+                "GAUSSDB_DATA_MCP_DRIVER_MISMATCH",
+                "register_das_connection requires GAUSSDB_DATA_MCP_DRIVER=das.",
+            )
+        base = DbCredentials.load(settings, instance_id)  # 全局 ak/sk/region + 实例条目
+        creds = _dc_replace(base, user=username, password=password)
+        conn_id = _pool(settings).register_db_user(creds, instance_id)
+        if settings.credentials_file:
+            from ..credentials import save_das_connection
+            save_das_connection(settings.credentials_file, instance_id, conn_id, database_name)
+        return {
+            "instance_id": instance_id,
+            "das_connection_id": conn_id,
+            "database_name": database_name or base.dbname,
+            "persisted": bool(settings.credentials_file),
+        }
+
+    return await asyncio.to_thread(_reg)

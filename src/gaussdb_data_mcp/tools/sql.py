@@ -93,7 +93,7 @@ def _exec_failed(exc: Exception) -> McpToolError:
     )
 
 
-def _run_channel(query: str, channel: ToolRisk) -> dict[str, Any]:
+def _run_channel(query: str, channel: ToolRisk, instance: str | None = None) -> dict[str, Any]:
     settings = _settings()
     result = _classify_for_channel(query, channel, max_sql_chars=settings.max_sql_chars)
     if channel is ToolRisk.DANGEROUS and not settings.enable_ddl:
@@ -102,7 +102,7 @@ def _run_channel(query: str, channel: ToolRisk) -> dict[str, Any]:
             "DDL execution is disabled.",
             hint="Set GAUSSDB_DATA_MCP_ENABLE_DDL=true (with GAUSSDB_DATA_MCP_READ_ONLY=false).",
         )
-    creds = DbCredentials.load(settings)
+    creds = DbCredentials.load(settings, instance)
     try:
         if channel is ToolRisk.READ:
             with _pool(settings).read_connection(creds, settings=settings) as conn:
@@ -120,7 +120,7 @@ def _run_channel(query: str, channel: ToolRisk) -> dict[str, Any]:
 
 
 @guard(risk=ToolRisk.READ)
-async def execute_sql(query: str) -> dict[str, Any]:
+async def execute_sql(query: str, instance: str | None = None) -> dict[str, Any]:
     """Execute one read-only SQL statement against GaussDB (SELECT / VALUES / SHOW /
     EXPLAIN / TABLE / WITH ... SELECT).
 
@@ -132,11 +132,11 @@ async def execute_sql(query: str) -> dict[str, Any]:
         query: Exactly one SQL statement. Multi-statement text, PREPARE/EXECUTE, SET,
             COPY and other utility statements are rejected.
     """
-    return await asyncio.to_thread(_run_channel, query, ToolRisk.READ)
+    return await asyncio.to_thread(_run_channel, query, ToolRisk.READ, instance)
 
 
 @guard(risk=ToolRisk.WRITE)
-async def execute_sql_write(query: str, confirm: bool = False) -> dict[str, Any]:
+async def execute_sql_write(query: str, confirm: bool = False, instance: str | None = None) -> dict[str, Any]:
     """Execute one data-modifying statement (INSERT / UPDATE / DELETE / MERGE).
 
     Scenario: apply data changes the user explicitly asked for. Requires
@@ -148,11 +148,11 @@ async def execute_sql_write(query: str, confirm: bool = False) -> dict[str, Any]
             execute_sql_dangerous for DDL.
         confirm: Reserved for guardrail confirm rules; keep false.
     """
-    return await asyncio.to_thread(_run_channel, query, ToolRisk.WRITE)
+    return await asyncio.to_thread(_run_channel, query, ToolRisk.WRITE, instance)
 
 
 @guard(risk=ToolRisk.DANGEROUS)
-async def execute_sql_dangerous(query: str, confirm: bool = False) -> dict[str, Any]:
+async def execute_sql_dangerous(query: str, confirm: bool = False, instance: str | None = None) -> dict[str, Any]:
     """Execute one DDL statement (CREATE / ALTER / DROP / TRUNCATE / GRANT ...).
 
     Scenario: schema changes requested explicitly by the user. Requires
@@ -163,11 +163,11 @@ async def execute_sql_dangerous(query: str, confirm: bool = False) -> dict[str, 
         query: Exactly one DDL statement.
         confirm: Set true on the second call after reviewing the confirmation envelope.
     """
-    return await asyncio.to_thread(_run_channel, query, ToolRisk.DANGEROUS)
+    return await asyncio.to_thread(_run_channel, query, ToolRisk.DANGEROUS, instance)
 
 
 @guard(risk=ToolRisk.READ)
-async def explain_sql(query: str) -> dict[str, Any]:
+async def explain_sql(query: str, instance: str | None = None) -> dict[str, Any]:
     """Run EXPLAIN on a SELECT statement without executing it.
 
     Scenario: check the query plan before running an expensive query.
@@ -175,10 +175,10 @@ async def explain_sql(query: str) -> dict[str, Any]:
     Args:
         query: One SELECT / TABLE / WITH ... SELECT statement.
     """
-    return await asyncio.to_thread(_run_explain, query)
+    return await asyncio.to_thread(_run_explain, query, instance)
 
 
-def _run_explain(query: str) -> dict[str, Any]:
+def _run_explain(query: str, instance: str | None = None) -> dict[str, Any]:
     settings = _settings()
     result = classify_sql(query, max_sql_chars=settings.max_sql_chars)
     # 必须先按 risk 锁 READ 通道：WITH 首关键词的写 CTE（WITH x AS (INSERT ...) SELECT）
@@ -188,7 +188,7 @@ def _run_explain(query: str) -> dict[str, Any]:
             "GAUSSDB_DATA_MCP_RISK_MISMATCH",
             f"explain_sql only accepts SELECT-class statements, got {result.kind}.",
         )
-    creds = DbCredentials.load(settings)
+    creds = DbCredentials.load(settings, instance)
     try:
         with _pool(settings).read_connection(creds, settings=settings) as conn:
             with _cursor(conn) as cur:

@@ -108,13 +108,23 @@ def test_das_driver_meta():
 
 
 def test_credentials_das_branch_validates(monkeypatch):
+    # v2：connection_id 缺失合法（自动注册）；ak/sk/region 必填
     monkeypatch.setenv("GAUSSDB_DATA_MCP_DRIVER", "das")
+    monkeypatch.delenv("GAUSSDB_DATA_MCP_CREDENTIALS_FILE", raising=False)
     s = DataMcpSettings.from_env()
     try:
         DbCredentials.load(s)
         raise AssertionError("should raise")
     except Exception as e:
-        assert "das_connection_id" in str(e)
+        assert "ak" in str(e)
+
+
+def test_region_chinese_alias():
+    assert DbCredentials._load_das.__doc__ is not None  # 冒烟：方法存在
+    from gaussdb_data_mcp.credentials import normalize_region
+    assert normalize_region("北京四") == "cn-north-4"
+    assert normalize_region("cn-north-4") == "cn-north-4"
+    assert normalize_region("") == ""
 
 
 def test_blank_shell_self_heal():
@@ -131,3 +141,37 @@ def test_blank_shell_self_heal():
     cur.execute("SELECT 1")
     assert http.calls[2][0].endswith("login")
     assert len(cur.fetchall()) == 2
+
+
+def test_v2_multi_instance(tmp_path, monkeypatch):
+    import json as _json
+    cred = tmp_path / 'cred.json'
+    cred.write_text(_json.dumps({
+        'ak': 'AKX', 'sk': 'SKX', 'region': '北京四', 'default_instance': 'inst-a',
+        'instances': {
+            'inst-a': {'das_connection_id': 'conn-a', 'dbname': 'test'},
+            'inst-b': {'user': 'root', 'password': 'pw', 'dbname': 'postgres'},
+        }}), encoding='utf-8')
+    monkeypatch.setenv('GAUSSDB_DATA_MCP_DRIVER', 'das')
+    monkeypatch.setenv('GAUSSDB_DATA_MCP_CREDENTIALS_FILE', str(cred))
+    s = DataMcpSettings.from_env()
+    a = DbCredentials.load(s)
+    assert (a.das_connection_id, a.das_region, a.dbname, a.instance_id) == ('conn-a', 'cn-north-4', 'test', 'inst-a')
+    b = DbCredentials.load(s, instance='inst-b')
+    assert b.das_connection_id == '' and b.instance_id == 'inst-b' and b.user == 'root'
+    try:
+        DbCredentials.load(s, instance='nope')
+        raise AssertionError('should raise')
+    except Exception as e:
+        assert 'nope' in str(e)
+
+
+def test_save_das_connection_roundtrip(tmp_path):
+    import json as _json
+    from gaussdb_data_mcp.credentials import save_das_connection
+    p = tmp_path / 'cred.json'
+    p.write_text('{"ak": "A", "instances": {}}', encoding='utf-8')
+    save_das_connection(str(p), 'inst-1', 'conn-9', 'mydb')
+    data = _json.loads(p.read_text(encoding='utf-8'))
+    assert data['instances']['inst-1'] == {'das_connection_id': 'conn-9', 'dbname': 'mydb'}
+    # 0600 chmod 在 Windows 上不可校验（POSIX-only），内容正确性已覆盖

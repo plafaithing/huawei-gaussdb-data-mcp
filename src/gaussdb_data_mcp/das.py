@@ -20,6 +20,7 @@ import json
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
@@ -31,7 +32,15 @@ from .credentials import DbCredentials
 _EXECUTE_PATH = "/v3/{project}/connections/{conn}/async-execute-sql-without-key"
 _RESULT_PATH = "/v3/{project}/connections/{conn}/get-execute-result-without-key"
 _LOGIN_PATH = "/v3/{project}/connections/{conn}/login"
+_REGISTER_PATH = "/v3/{project}/instances/{iid}/db-users"
+_REGISTER_DATASTORE = "gaussdbv5"
+_IAM_HOST = "iam.myhuaweicloud.com"
 _TIMEOUT = 30
+
+
+def _url_quote(s: str) -> str:
+    from urllib.parse import quote
+    return quote(s, safe="~")
 
 
 def _die(code: str, message: str) -> McpToolError:
@@ -47,14 +56,27 @@ class _DasHttp:
         self._sk = sk
 
     def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        body_str = json.dumps(body)
+        return self._send("POST", path, json.dumps(body), [])
+
+
+    def get(self, host: str, path: str, query: list[tuple[str, str]]) -> dict[str, Any]:
+        # GET 签名：query 参与规范化（按 key 排序、URL 编码）
+        return self._send("GET", path, "", query, host=host)
+
+
+    def _send(self, method: str, path: str, body_str: str, query: list[tuple[str, str]],
+              host: str | None = None) -> dict[str, Any]:
+        host = host or self._host
         date = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         canonical_uri = path if path.endswith("/") else path + "/"
-        canonical_headers = f"content-type:application/json\nhost:{self._host}\nx-sdk-date:{date}\n"
+        canonical_query = "&".join(
+            f"{_url_quote(k)}={_url_quote(v)}" for k, v in sorted(query)
+        )
+        canonical_headers = f"content-type:application/json\nhost:{host}\nx-sdk-date:{date}\n"
         signed_headers = "content-type;host;x-sdk-date"
         payload_hash = hashlib.sha256(body_str.encode("utf-8")).hexdigest()
         canonical_request = (
-            f"POST\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+            f"{method}\n{canonical_uri}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
         )
         string_to_sign = (
             f"SDK-HMAC-SHA256\n{date}\n"
@@ -66,13 +88,15 @@ class _DasHttp:
         authorization = (
             f"SDK-HMAC-SHA256 Access={self._ak}, SignedHeaders={signed_headers}, Signature={signature}"
         )
-        resp = requests.post(
-            f"https://{self._host}{path}",
-            data=body_str.encode("utf-8"),
+        qs = f"?{canonical_query}" if canonical_query else ""
+        resp = requests.request(
+            method,
+            f"https://{host}{path}{qs}",
+            data=body_str.encode("utf-8") if body_str else None,
             headers={
                 "content-type": "application/json",
                 "X-Sdk-Date": date,
-                "Host": self._host,
+                "Host": host,
                 "Authorization": authorization,
             },
             timeout=_TIMEOUT,
@@ -80,7 +104,8 @@ class _DasHttp:
         try:
             return resp.json()
         except ValueError as exc:
-            raise _die("GAUSSDB_DATA_MCP_DAS_HTTP", f"DAS returned non-JSON HTTP {resp.status_code}") from exc
+            raise _die("GAUSSDB_DATA_MCP_DAS_HTTP",
+                       f"DAS returned non-JSON HTTP {resp.status_code}") from exc
 
 
 class DasBackend:
@@ -89,6 +114,7 @@ class DasBackend:
     def __init__(self, settings: Any) -> None:
         self._settings = settings
         self._lock = threading.Lock()
+        self._project_cache: dict[tuple[str, str], str] = {}
 
     # -- 池接口（das 模式无池：free_count 恒 0） --------------------------------
     def free_count(self) -> int:
@@ -110,20 +136,65 @@ class DasBackend:
         )
 
     def _project(self, creds: DbCredentials) -> str:
-        return creds.das_project_id
+        if creds.das_project_id:
+            return creds.das_project_id
+        cache_key = (creds.das_ak, creds.das_region)
+        with self._lock:
+            cached = self._project_cache.get(cache_key)
+        if cached:
+            return cached
+        resp = self._http(creds).get(_IAM_HOST, "/v3/projects", [("name", creds.das_region)])
+        projects = resp.get("projects") or []
+        pid = (projects[0] or {}).get("id") if projects else ""
+        if not pid:
+            raise _die(
+                "GAUSSDB_DATA_MCP_DAS_PROJECT_UNRESOLVED",
+                f"Cannot resolve project_id for region '{creds.das_region}': "
+                f"{json.dumps(resp, ensure_ascii=False)[:200]}",
+            )
+        with self._lock:
+            self._project_cache[cache_key] = pid
+        return pid
 
-    def _conn(self, creds: DbCredentials) -> str:
-        if not creds.das_connection_id:
+    def register_db_user(self, creds: DbCredentials, instance_id: str) -> str:
+        """DAS RegisterDbUser（datastore_type=gaussdbv5，survey/07 §8）；返回 db_user_id。"""
+        resp = self._http(creds).post(
+            _REGISTER_PATH.format(project=self._project(creds), iid=instance_id),
+            {"db_username": creds.user, "db_user_password": creds.password,
+             "datastore_type": _REGISTER_DATASTORE},
+        )
+        uid = resp.get("db_user_id")
+        if not uid:
+            raise _die(
+                "GAUSSDB_DATA_MCP_DAS_REGISTER_FAILED",
+                f"DAS register rejected: {json.dumps(resp, ensure_ascii=False)[:300]}",
+            )
+        return uid
+
+    def _ensure_connection(self, creds: DbCredentials, settings: Any) -> DbCredentials:
+        """connection_id 缺失：自动 RegisterDbUser 并原子写回 credentials.json（§8）。"""
+        if not (creds.instance_id and creds.user and creds.password):
             raise _die(
                 "GAUSSDB_DATA_MCP_DAS_NO_CONNECTION",
-                "das driver requires credentials field das_connection_id (from RegisterDbUser).",
+                "das driver requires das_connection_id; auto-register needs "
+                "instance_id/user/password in the instance entry.",
             )
-        return creds.das_connection_id
+        new_id = self.register_db_user(creds, creds.instance_id)
+        if settings.credentials_file:
+            from .credentials import save_das_connection
+            save_das_connection(
+                settings.credentials_file, creds.instance_id, new_id, creds.dbname or None
+            )
+        return replace(creds, das_connection_id=new_id)
 
     def execute(self, creds: DbCredentials, settings: Any, sql: str) -> dict[str, Any]:
         """两步异步：执行受理 → 立即取结果。返回原始驼峰响应 dict。"""
+        if not creds.dbname:
+            raise _die("GAUSSDB_DATA_MCP_DAS_NO_DATABASE", "das driver requires database_name.")
+        if not creds.das_connection_id:
+            creds = self._ensure_connection(creds, settings)  # 幂等：映射缺失才注册
         http = self._http(creds)
-        conn = self._conn(creds)
+        conn = creds.das_connection_id
         body = {
             "database_name": creds.dbname,
             "schema_name": creds.das_schema,
@@ -132,8 +203,6 @@ class DasBackend:
             "perpage": settings.max_rows,
             "ignore_limit": False,
         }
-        if not creds.dbname:
-            raise _die("GAUSSDB_DATA_MCP_DAS_NO_DATABASE", "das driver requires database_name.")
         resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
         exec_id = resp.get("executeId")
         if not resp.get("success") or not exec_id:

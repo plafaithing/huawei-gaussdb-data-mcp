@@ -95,8 +95,8 @@ class DasBackend:
         return 0
 
     @contextmanager
-    def read_connection(self, creds: DbCredentials, *, settings: Any) -> Iterator["DasCursor"]:
-        yield DasCursor(self, creds, settings)
+    def read_connection(self, creds: DbCredentials, *, settings: Any) -> Iterator["DasConnection"]:
+        yield DasConnection(self, creds, settings)
 
     def run_write(self, creds: DbCredentials, *, settings: Any, sql: str) -> int:
         cur = DasCursor(self, creds, settings)
@@ -174,6 +174,24 @@ class DasBackend:
             http.post(_LOGIN_PATH.format(project=self._project(creds), conn=conn), body)
 
 
+class DasConnection:
+    """连接句柄（conn.cursor() 契约）；das 模式无会话状态，cursor 即完整执行。"""
+
+    def __init__(self, backend: DasBackend, creds: DbCredentials, settings: Any) -> None:
+        self._backend = backend
+        self._creds = creds
+        self._settings = settings
+
+    def cursor(self) -> "DasCursor":
+        return DasCursor(self._backend, self._creds, self._settings)
+
+    def __enter__(self) -> "DasConnection":
+        return self
+
+    def __exit__(self, *a: Any) -> None:
+        return None
+
+
 class DasDriver:
     """驱动元信息（drivers.get_driver 的 das 分支）：与 Psycopg2Driver 同接口。"""
 
@@ -226,6 +244,10 @@ class DasCursor:
     def fetchall(self) -> list[tuple]:
         out, self._rows = self._rows, []
         return out
+
+    def close(self) -> None:
+        self._rows = []
+        self.description = None
 
     def __enter__(self) -> "DasCursor":
         return self

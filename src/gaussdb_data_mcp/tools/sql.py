@@ -22,12 +22,16 @@ _POOL: ConnectionPool | None = None
 _POOL_LOCK = threading.Lock()
 
 
-def _pool(settings: DataMcpSettings) -> ConnectionPool:
-    """延迟初始化：池尺寸来自环境变量（GAUSSDB_DATA_MCP_POOL_MIN/MAX）。"""
+def _pool(settings: DataMcpSettings) -> Any:
+    """延迟初始化：das 轰走 DAS 后端（无池），否则 DB 协议连接池。"""
     global _POOL
     with _POOL_LOCK:
         if _POOL is None:
-            _POOL = ConnectionPool(pool_min=settings.pool_min, pool_max=settings.pool_max)
+            if settings.driver == "das":
+                from ..das import get_das_backend
+                _POOL = get_das_backend(settings)
+            else:
+                _POOL = ConnectionPool(pool_min=settings.pool_min, pool_max=settings.pool_max)
         return _POOL
 
 

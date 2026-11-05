@@ -31,6 +31,7 @@ class DataMcpSettings:
     # 安全开关（用户决策：写能力一期可用，但代码级默认值必须安全）
     read_only: bool = True
     enable_ddl: bool = False
+    driver: str = "auto"
     # 文件
     credentials_file: str | None = None
     tokens_file: str | None = None
@@ -68,6 +69,7 @@ class DataMcpSettings:
         settings = cls(
             read_only=_env_bool("GAUSSDB_DATA_MCP_READ_ONLY", True),
             enable_ddl=_env_bool("GAUSSDB_DATA_MCP_ENABLE_DDL", False),
+            driver=os.getenv("GAUSSDB_DATA_MCP_DRIVER", "auto").strip().lower() or "auto",
             credentials_file=os.getenv("GAUSSDB_DATA_MCP_CREDENTIALS_FILE"),
             tokens_file=os.getenv("GAUSSDB_DATA_MCP_TOKENS_FILE"),
             guardrails_config_path=os.getenv("GAUSSDB_DATA_MCP_GUARDRAILS_CONFIG"),
@@ -94,6 +96,8 @@ class DataMcpSettings:
             db_sslcert=os.getenv("GAUSSDB_DATA_MCP_DB_SSLCERT"),
             db_sslkey=os.getenv("GAUSSDB_DATA_MCP_DB_SSLKEY"),
         )
+        if settings.driver not in {"auto", "psycopg2", "pyodbc", "das"}:
+            raise McpToolError("MCP_INVALID_ARGS", "GAUSSDB_DATA_MCP_DRIVER must be auto/psycopg2/pyodbc/das.")
         if not 1 <= settings.server_port <= 65535:
             raise McpToolError("MCP_INVALID_ARGS", "MCP_SERVER_PORT must be 1..65535.")
         if settings.max_rows < 1 or settings.statement_timeout_ms < 1:

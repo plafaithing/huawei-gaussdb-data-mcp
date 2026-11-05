@@ -183,16 +183,19 @@ def _is_auth_failure(pyodbc: Any, exc: Exception) -> bool:
     return "password authentication failed" in str(exc).lower()
 
 
-def get_driver() -> Psycopg2Driver | PyodbcDriver:
-    """驱动工厂：env 强制指定，否则按平台（Windows → pyodbc，其余 → psycopg2）。"""
+def get_driver() -> Psycopg2Driver | PyodbcDriver | Any:
+    """驱动工厂：env 强制指定，否则按平台（Windows → pyodbc，其余 → psycopg2）。das 轰 DAS 轨。"""
     name = os.environ.get(_DRIVER_ENV, "").strip().lower()
     if not name:
         name = "pyodbc" if sys.platform == "win32" else "psycopg2"
+    if name == "das":
+        from .das import DasDriver
+        return DasDriver()
     if name == "psycopg2":
         return Psycopg2Driver()
     if name == "pyodbc":
         return PyodbcDriver()
     raise McpToolError(
         "GAUSSDB_DATA_MCP_DRIVER_INVALID",
-        f"{_DRIVER_ENV} must be 'psycopg2' or 'pyodbc' (got {name!r}).",
+        f"{_DRIVER_ENV} must be 'psycopg2', 'pyodbc' or 'das' (got {name!r}).",
     )

@@ -79,6 +79,13 @@ class DbCredentials:
     sslcert: str | None = None
     sslkey: str | None = None
     fingerprint: str = ""
+    # das 轨（SQL over 管控面 HTTPS，survey/07）：仅 GAUSSDB_DATA_MCP_DRIVER=das 时使用
+    das_connection_id: str = ""
+    das_ak: str = field(default="", repr=False)
+    das_sk: str = field(default="", repr=False)
+    das_project_id: str = ""
+    das_region: str = "cn-north-4"
+    das_schema: str = "public"
 
     @property
     def connect_kwargs(self) -> dict[str, Any]:
@@ -92,6 +99,41 @@ class DbCredentials:
         return kwargs
 
     @classmethod
+    def _load_das(cls, pick, settings: DataMcpSettings) -> "DbCredentials":
+        """das 轨：无需 host/port；必需 das_connection_id/ak/sk/project_id（survey/07）。"""
+        creds = cls(
+            host="", port=0,
+            dbname=pick("dbname", settings.db_dbname) or "postgres",
+            user=pick("user", settings.db_user),
+            password=pick("password", settings.db_password),
+            das_connection_id=pick("das_connection_id", "") or "",
+            das_ak=pick("ak", "") or os.environ.get("GAUSSDB_DATA_MCP_CLOUD_AK", ""),
+            das_sk=pick("sk", "") or os.environ.get("GAUSSDB_DATA_MCP_CLOUD_SK", ""),
+            das_project_id=pick("project_id", "") or os.environ.get("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID", ""),
+            das_region=pick("region", "") or os.environ.get("GAUSSDB_DATA_MCP_CLOUD_REGION", "cn-north-4"),
+            das_schema=pick("schema", "") or "public",
+        )
+        missing = [
+            k for k, v in (
+                ("das_connection_id", creds.das_connection_id), ("ak", creds.das_ak),
+                ("sk", creds.das_sk), ("project_id", creds.das_project_id),
+            ) if not v
+        ]
+        if missing:
+            raise McpToolError(
+                "MCP_CREDENTIAL_ERROR",
+                f"Missing DAS credentials: {', '.join(missing)}.",
+                hint="Register via DAS RegisterDbUser, then set das_connection_id/ak/sk/project_id "
+                     "in the credentials file (or GAUSSDB_DATA_MCP_CLOUD_* variables).",
+            )
+        canonical = json.dumps(
+            {"conn": creds.das_connection_id, "project": creds.das_project_id,
+             "region": creds.das_region, "db": creds.dbname, "schema": creds.das_schema},
+            sort_keys=True,
+        )
+        return replace(creds, fingerprint=hashlib.sha256(canonical.encode()).hexdigest()[:16])
+
+    @classmethod
     def load(cls, settings: DataMcpSettings) -> "DbCredentials":
         secret = _read_secret_file(settings.credentials_file) if settings.credentials_file else {}
 
@@ -99,6 +141,8 @@ class DbCredentials:
             value = secret.get(file_key)
             return str(value) if value is not None else env_value
 
+        if settings.driver == "das":
+            return cls._load_das(pick, settings)
         try:
             port = int(pick("port", settings.db_port) or 0)
         except (TypeError, ValueError):

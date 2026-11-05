@@ -135,9 +135,6 @@ class DasBackend:
         if not creds.dbname:
             raise _die("GAUSSDB_DATA_MCP_DAS_NO_DATABASE", "das driver requires database_name.")
         resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
-        if not resp.get("success") and resp.get("errorCodeStr") == "DAS.5018":
-            self._relogin(creds, http, conn)  # 会话失效：retry_login 自愈一次
-            resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
         exec_id = resp.get("executeId")
         if not resp.get("success") or not exec_id:
             raise _die(
@@ -147,8 +144,9 @@ class DasBackend:
         result = http.post(
             _RESULT_PATH.format(project=self._project(creds), conn=conn), {"execute_id": exec_id}
         )
-        if "columnValues" not in result and result.get("errorCodeStr") == "DAS.5018":
-            # 会话失效：retry_login 自愈一次后整链重试
+        # 空壳检测：未激活过的连接（或会话失效）会返回 200 空响应（无报错）——
+        # retry_login 自愈一次后整链重试；5018 同走此路
+        if not (result.get("metadata") or result.get("columnValues") or result.get("executeStatus")):
             self._relogin(creds, http, conn)
             resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
             exec_id = resp.get("executeId")

@@ -67,19 +67,12 @@ def test_execute_two_steps_and_parsing():
     assert cur.fetchall() == [("postgres", "10"), ("test", "16750")]
 
 
-def test_5018_self_heal_relogin_then_retry():
-    http = _FakeHttp([
-        {"errorCodeStr": "DAS.5018", "error_msg": "timed out"},   # 受理失败
-        {},                                                        # relogin
-        {"success": True, "executeId": "e2"},                      # 重试受理
-        dict(_RAW_RESULT),                                         # 取结果
-    ])
+def test_execute_5018_rejected_no_heal():
+    # 5018 只出现在取结果阶段（实测）；受理阶段 5018 直接失败不自愈
+    http = _FakeHttp([{"errorCodeStr": "DAS.5018", "error_msg": "timed out"}])
     b = _backend(http)
-    cur = das_mod.DasCursor(b, _creds(), _settings())
-    cur.execute("SELECT 1")
-    assert http.calls[1][0].endswith("login")                     # 第二个调用是 login
-    assert http.calls[1][1]["retry_login"]["is_save_password"] is True
-    assert cur.fetchone() == ("postgres", "10")
+    with pytest.raises(Exception, match="DAS execute rejected"):
+        b.execute(_creds(), _settings(), "SELECT 1")
 
 
 def test_result_5018_self_heal():
@@ -122,3 +115,19 @@ def test_credentials_das_branch_validates(monkeypatch):
         raise AssertionError("should raise")
     except Exception as e:
         assert "das_connection_id" in str(e)
+
+
+def test_blank_shell_self_heal():
+    # 新连接未激活：200 空响应（无报错）——retry_login 后重试成功
+    http = _FakeHttp([
+        {"success": True, "executeId": "e6"},
+        {"rows": 0, "metadata": None, "columnValues": None, "executeStatus": None},  # 空壳
+        {},                                   # relogin
+        {"success": True, "executeId": "e7"},
+        dict(_RAW_RESULT),
+    ])
+    b = _backend(http)
+    cur = das_mod.DasCursor(b, _creds(), _settings())
+    cur.execute("SELECT 1")
+    assert http.calls[2][0].endswith("login")
+    assert len(cur.fetchall()) == 2

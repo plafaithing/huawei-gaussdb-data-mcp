@@ -60,7 +60,7 @@ def test_execute_two_steps_and_parsing():
     cur.execute("SELECT 1")
     assert http.calls[0][0].endswith("async-execute-sql-without-key")
     body = http.calls[0][1]
-    assert body["database_name"] == "postgres" and body["schema_name"] == "public"
+    assert body["database_name"] == "postgres" and body["schema_name"] == "dbe_alert"
     assert body["ignore_limit"] is False
     assert http.calls[1][1] == {"execute_id": "e1"}
     assert [d[0] for d in cur.description] == ["datname", "datdba"]   # label 还原

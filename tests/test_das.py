@@ -202,18 +202,17 @@ def test_swallowed_sql_error_fails_fast():
         das_mod.DasCursor(b, _creds(), _settings()).execute('CREATE DATABASE x')
 
 
-def test_panel_key_only_for_pg_ddl():
+def test_panel_key_only_for_cross_db_ddl():
     # panelKey 仅在 postgres 库 + DDL 时附加（pg 库全部 DDL 挂死实测；数据一致性约束）
-    http = _FakeHttp([{'success': True, 'executeId': 'eb'}, dict(_RAW_RESULT)])
-    b = _backend(http)
-    das_mod.DasCursor(b, _creds(), _settings()).execute('CREATE TABLE x (id int)')
-    assert 'panelKey' in http.calls[0][1]
     http_db = _FakeHttp([{'success': True, 'executeId': 'eb2'}, dict(_RAW_RESULT)])
     das_mod.DasCursor(_backend(http_db), _creds(), _settings()).execute('CREATE DATABASE x')
     assert 'panelKey' in http_db.calls[0][1]
+    http_drop = _FakeHttp([{'success': True, 'executeId': 'ee'}, dict(_RAW_RESULT)])
+    das_mod.DasCursor(_backend(http_drop), _creds(), _settings()).execute('DROP DATABASE x')
+    assert 'panelKey' in http_drop.calls[0][1]
+    http_tbl = _FakeHttp([{'success': True, 'executeId': 'ef'}, dict(_RAW_RESULT)])
+    das_mod.DasCursor(_backend(http_tbl), _creds(), _settings()).execute('CREATE TABLE x (id int)')
+    assert 'panelKey' not in http_tbl.calls[0][1]
     http2 = _FakeHttp([{'success': True, 'executeId': 'ec'}, dict(_RAW_RESULT)])
     das_mod.DasCursor(_backend(http2), _creds(), _settings()).execute('SELECT 1')
     assert 'panelKey' not in http2.calls[0][1]
-    http3 = _FakeHttp([{'success': True, 'executeId': 'ed'}, dict(_RAW_RESULT)])
-    das_mod.DasCursor(_backend(http3), _creds(dbname='test'), _settings()).execute('CREATE TABLE x (id int)')
-    assert 'panelKey' not in http3.calls[0][1]

@@ -211,11 +211,11 @@ class DasBackend:
             "perpage": settings.max_rows,
             "ignore_limit": False,
         }
-        # panelKey（研发方案 1，2026-11-06）：**仅在 pg 系统库执行 DDL 时附加**——
-        # GaussDB 禁止事务中建库（DAS 吞错伪装成功），且实测 pg 库中 CREATE TABLE
-        # 等全部 DDL 均挂死（60s 无响应）；panelKey 走非事务上下文实测生效。
-        # 普通 SQL 不带——panelKey 改变执行上下文，可能造成数据不一致（用户决策）。
-        if creds.dbname == "postgres" and _DDL_RE.match(sql):
+        # panelKey（研发方案 1，2026-11-06）：**CREATE/DROP DATABASE 必须携带**——
+        # 无 panelKey 时 DAS 包事务执行，GaussDB 拒绝并吞错伪装成功（实测 5 次，
+        # 与 database_name 无关）；带 panelKey 走非事务上下文实测生效（test_panel/
+        # test_flow_db2 建成 compat=A）。其他语句不加（数据一致性约束）。
+        if _CROSS_DB_DDL_RE.match(sql):
             body["panelKey"] = str(uuid.uuid4())
         resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
         exec_id = resp.get("executeId")

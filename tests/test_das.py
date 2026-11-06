@@ -175,3 +175,17 @@ def test_save_das_connection_roundtrip(tmp_path):
     data = _json.loads(p.read_text(encoding='utf-8'))
     assert data['instances']['inst-1'] == {'das_connection_id': 'conn-9', 'dbname': 'mydb'}
     # 0600 chmod 在 Windows 上不可校验（POSIX-only），内容正确性已覆盖
+
+
+def test_create_database_uses_dbe_alert_schema():
+    http = _FakeHttp([{'success': True, 'executeId': 'e8'}, dict(_RAW_RESULT)])
+    b = _backend(http)
+    das_mod.DasCursor(b, _creds(), _settings()).execute('CREATE DATABASE x_db')
+    assert http.calls[0][1]['schema_name'] == 'dbe_alert'
+
+
+def test_normal_sql_keeps_configured_schema():
+    http = _FakeHttp([{'success': True, 'executeId': 'e9'}, dict(_RAW_RESULT)])
+    b = _backend(http)
+    das_mod.DasCursor(b, _creds(), _settings()).execute('SELECT 1 FROM t')
+    assert http.calls[0][1]['schema_name'] == 'public'

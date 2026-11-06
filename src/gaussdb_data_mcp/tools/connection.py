@@ -146,14 +146,23 @@ async def list_user_databases(instance: str | None = None) -> dict[str, Any]:
         user_dbs = [d for d in all_dbs if d[0] not in _SYSTEM_DATABASES]
         out: dict[str, Any] = {
             "current_database": creds.dbname,
+            "status": "ready" if creds.dbname not in _SYSTEM_DATABASES else "guidance_needed",
             "system_databases": sorted(d[0] for d in all_dbs if d[0] in _SYSTEM_DATABASES),
             "user_databases": sorted(d[0] for d in user_dbs),
             "compatibility": {d[0]: d[1] for d in user_dbs},
         }
+        if out["status"] == "ready":
+            # dbname 已是用户库：直接使用，无需引导（用户 2026-11-06 规则）
+            return out
         if not user_dbs:
             out["guidance"] = (
                 "No user database found. Create one first, e.g. "
                 "execute_sql_dangerous('CREATE DATABASE mydb'), then set 'dbname' "
+                "in the credentials entry (hot-reloaded) to switch."
+            )
+        else:
+            out["guidance"] = (
+                "Pick a user database from 'user_databases' and set 'dbname' "
                 "in the credentials entry (hot-reloaded) to switch."
             )
         return out

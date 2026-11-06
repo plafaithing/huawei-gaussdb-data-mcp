@@ -216,3 +216,31 @@ def test_panel_key_only_for_cross_db_ddl():
     http2 = _FakeHttp([{'success': True, 'executeId': 'ec'}, dict(_RAW_RESULT)])
     das_mod.DasCursor(_backend(http2), _creds(), _settings()).execute('SELECT 1')
     assert 'panelKey' not in http2.calls[0][1]
+
+
+def test_list_user_databases_status_ready(monkeypatch, tmp_path):
+    # dbname 已是用户库 → status=ready，无 guidance（直接使用）
+    cred = tmp_path / 'cred.json'
+    cred.write_text(json.dumps({'ak': 'A', 'sk': 'S', 'region': 'cn-north-4',
+        'default_instance': 'i1',
+        'instances': {'i1': {'das_connection_id': 'c1', 'dbname': 'test'}}}), encoding='utf-8')
+    monkeypatch.setenv('GAUSSDB_DATA_MCP_DRIVER', 'das')
+    monkeypatch.setenv('GAUSSDB_DATA_MCP_CREDENTIALS_FILE', str(cred))
+    from gaussdb_data_mcp.tools import connection as conn_tools
+    from gaussdb_data_mcp.config import DataMcpSettings
+    s = DataMcpSettings.from_env()
+    # 模拟查询结果
+    class _Cur:
+        def execute(self, q, p=None): pass
+        def fetchall(self): return [('postgres', 'A'), ('test', 'A')]
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def close(self): pass
+    class _Conn:
+        def cursor(self): return _Cur()
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+    monkeypatch.setattr(conn_tools, '_pool', lambda s: type('B', (), {
+        'read_connection': staticmethod(lambda c, settings: _Conn())})())
+    r = asyncio.run(conn_tools.list_user_databases())
+    assert r['status'] == 'ready' and r['user_databases'] == ['test'] and 'guidance' not in r

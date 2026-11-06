@@ -233,7 +233,17 @@ class DasBackend:
             result = http.post(
                 _RESULT_PATH.format(project=self._project(creds), conn=conn), {"execute_id": exec_id}
             )
+        self._check_sql_error(result)
         return result
+
+    @staticmethod
+    def _check_sql_error(result: dict[str, Any]) -> None:
+        """DAS 把 SQL 执行错误吞进 errorMessage 且 errorCodeStr/executeStatus 仍为
+        成功态（实测："CREATE DATABASE cannot be executed in a transaction block."）
+        ——errorMessage 非空即视为执行失败，fail-fast。"""
+        err = result.get("errorMessage")
+        if err:
+            raise _die("GAUSSDB_DATA_MCP_SQL_ERROR", f"DAS SQL error: {err}")
 
     def _relogin(self, creds: DbCredentials, http: _DasHttp, conn: str) -> None:
         """会话自愈：login(username-only)——DAS 用注册时托管的密码，**零密码输入**。

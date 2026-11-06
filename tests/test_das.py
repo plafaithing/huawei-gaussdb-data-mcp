@@ -189,3 +189,14 @@ def test_normal_sql_uses_dbe_alert_default():
     b = _backend(http)
     das_mod.DasCursor(b, _creds(), _settings()).execute('SELECT 1 FROM t')
     assert http.calls[0][1]['schema_name'] == 'dbe_alert'
+
+
+def test_swallowed_sql_error_fails_fast():
+    # DAS 把 SQL 错误吞进 errorMessage 且状态层全成功——必须 fail-fast
+    http = _FakeHttp([{'success': True, 'executeId': 'ea'},
+                      {'errorCodeStr': '200',
+                       'errorMessage': 'ERROR: CREATE DATABASE cannot be executed in a transaction block.',
+                       'rows': 0, 'executeStatus': 'finished'}])
+    b = _backend(http)
+    with __import__('pytest').raises(Exception, match='transaction block'):
+        das_mod.DasCursor(b, _creds(), _settings()).execute('CREATE DATABASE x')

@@ -17,7 +17,7 @@ def _creds(**kw):
     base = dict(
         host="", port=0, dbname="postgres", user="root", password="pw",
         das_connection_id="conn-1", das_ak="ak", das_sk="sk",
-        das_project_id="proj", das_region="cn-north-4", das_schema="public",
+        das_project_id="proj", das_region="cn-north-4", das_schema="dbe_alert",
     )
     base.update(kw)
     return DbCredentials(**base)
@@ -184,8 +184,8 @@ def test_create_database_uses_dbe_alert_schema():
     assert http.calls[0][1]['schema_name'] == 'dbe_alert'
 
 
-def test_normal_sql_keeps_configured_schema():
+def test_normal_sql_uses_dbe_alert_default():
     http = _FakeHttp([{'success': True, 'executeId': 'e9'}, dict(_RAW_RESULT)])
     b = _backend(http)
     das_mod.DasCursor(b, _creds(), _settings()).execute('SELECT 1 FROM t')
-    assert http.calls[0][1]['schema_name'] == 'public'
+    assert http.calls[0][1]['schema_name'] == 'dbe_alert'

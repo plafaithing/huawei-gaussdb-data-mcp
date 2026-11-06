@@ -197,20 +197,14 @@ class DasBackend:
         conn = creds.das_connection_id
         body = {
             "database_name": creds.dbname,
+            # dbe_alert 为默认 schema（用户 2026-11-06 拍板；跨库 DDL 仅在此 schema 下
+            # 生效——public 会被 DAS 静默吞掉，survey/07）。显式配置可覆盖。
+            "schema_name": creds.das_schema,
             "sql_script": sql,
             "curpage": 1,
             "perpage": settings.max_rows,
             "ignore_limit": False,
         }
-        # 跨库 DDL workaround（survey/07 实测）：schema_name=public 时 DAS 静默吞掉
-        # CREATE/DROP DATABASE（受理 success 不生效）；dbe_alert（内置工具 schema）
-        # 下实测生效。业务 SQL 维持用户配置的 schema 上下文不变。
-        _u = sql.lstrip().upper()
-        body["schema_name"] = (
-            "dbe_alert"
-            if _u.startswith("CREATE DATABASE") or _u.startswith("DROP DATABASE")
-            else creds.das_schema
-        )
         resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
         exec_id = resp.get("executeId")
         if not resp.get("success") or not exec_id:

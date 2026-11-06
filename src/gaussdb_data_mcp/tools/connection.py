@@ -15,8 +15,12 @@ from huaweicloud_mcp_core import ToolRisk, guard
 from huaweicloud_mcp_core.errors import McpToolError
 
 from ..credentials import DbCredentials
+from ..db import _cursor
 from ..drivers import get_driver
 from .sql import _pool, _settings
+
+# GaussDB 系统库（das 轨 pg_database 实测全集）；用户库 = 全集剔除后的部分
+_SYSTEM_DATABASES = {"postgres", "template0", "template1", "templatea", "templatem"}
 
 
 @guard(risk=ToolRisk.READ)
@@ -119,3 +123,39 @@ async def register_das_connection(instance_id: str, username: str, password: str
         }
 
     return await asyncio.to_thread(_reg)
+
+
+@guard(risk=ToolRisk.READ)
+async def list_user_databases(instance: str | None = None) -> dict[str, Any]:
+    """List non-system databases to guide first-time database selection.
+
+    Scenario: after the first connection (which lands on the pg catalog database),
+    check whether a user database exists. If yes, the user picks one (set 'dbname'
+    in the credentials entry, hot-reloaded); if none, guide the user to create one
+    via CREATE DATABASE (the das track auto-applies panelKey for it, survey/07).
+    System databases (postgres/templates) are excluded.
+    """
+
+    def _list() -> dict[str, Any]:
+        settings = _settings()
+        creds = DbCredentials.load(settings, instance)
+        with _pool(settings).read_connection(creds, settings=settings) as conn:
+            with _cursor(conn) as cur:
+                cur.execute("SELECT datname, datcompatibility FROM pg_database ORDER BY datname")
+                all_dbs = [(row[0], row[1]) for row in cur.fetchall()]
+        user_dbs = [d for d in all_dbs if d[0] not in _SYSTEM_DATABASES]
+        out: dict[str, Any] = {
+            "current_database": creds.dbname,
+            "system_databases": sorted(d[0] for d in all_dbs if d[0] in _SYSTEM_DATABASES),
+            "user_databases": sorted(d[0] for d in user_dbs),
+            "compatibility": {d[0]: d[1] for d in user_dbs},
+        }
+        if not user_dbs:
+            out["guidance"] = (
+                "No user database found. Create one first, e.g. "
+                "execute_sql_dangerous('CREATE DATABASE mydb'), then set 'dbname' "
+                "in the credentials entry (hot-reloaded) to switch."
+            )
+        return out
+
+    return await asyncio.to_thread(_list)

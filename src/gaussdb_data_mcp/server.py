@@ -70,6 +70,7 @@ def build_sql_server() -> MCPServer:
         middleware=[middleware],
     )
     # 注册副作用导入：@guard 全局注册 + add_tool
+    from .tools import connection as connection_tools
     from .tools import metadata as metadata_tools
     from .tools import sql as sql_tools
 
@@ -81,6 +82,9 @@ def build_sql_server() -> MCPServer:
         metadata_tools.list_schemas,
         metadata_tools.list_tables,
         metadata_tools.describe_table,
+        connection_tools.is_database_connected,
+        connection_tools.get_connection_info,
+        connection_tools.list_user_databases,
     ):
         server.add_tool(tool_fn)
 

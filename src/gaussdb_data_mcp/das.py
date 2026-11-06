@@ -17,8 +17,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -36,6 +38,8 @@ _REGISTER_PATH = "/v3/{project}/instances/{iid}/db-users"
 _REGISTER_DATASTORE = "gaussdbv5"
 _IAM_HOST = "iam.myhuaweicloud.com"
 _TIMEOUT = 30
+# DDL 语句识别（大小写不敏感）：pg 系统库中执行 DDL 需要 panelKey（见 execute 注释）
+_DDL_RE = re.compile(r"^\s*(CREATE|DROP|ALTER|TRUNCATE|COMMENT|RENAME)\b", re.IGNORECASE)
 
 
 def _url_quote(s: str) -> str:
@@ -201,14 +205,18 @@ class DasBackend:
         conn = creds.das_connection_id
         body = {
             "database_name": creds.dbname,
-            # dbe_alert 为默认 schema（用户 2026-11-06 拍板；跨库 DDL 仅在此 schema 下
-            # 生效——public 会被 DAS 静默吞掉，survey/07）。显式配置可覆盖。
             "schema_name": creds.das_schema,
             "sql_script": sql,
             "curpage": 1,
             "perpage": settings.max_rows,
             "ignore_limit": False,
         }
+        # panelKey（研发方案 1，2026-11-06）：**仅在 pg 系统库执行 DDL 时附加**——
+        # GaussDB 禁止事务中建库（DAS 吞错伪装成功），且实测 pg 库中 CREATE TABLE
+        # 等全部 DDL 均挂死（60s 无响应）；panelKey 走非事务上下文实测生效。
+        # 普通 SQL 不带——panelKey 改变执行上下文，可能造成数据不一致（用户决策）。
+        if creds.dbname == "postgres" and _DDL_RE.match(sql):
+            body["panelKey"] = str(uuid.uuid4())
         resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
         exec_id = resp.get("executeId")
         if not resp.get("success") or not exec_id:

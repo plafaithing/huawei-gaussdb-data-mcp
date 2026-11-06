@@ -43,8 +43,8 @@ def _url_quote(s: str) -> str:
     return quote(s, safe="~")
 
 
-def _die(code: str, message: str) -> McpToolError:
-    return McpToolError(code, message)
+def _die(code: str, message: str, hint: str | None = None) -> McpToolError:
+    return McpToolError(code, message, hint=hint) if hint else McpToolError(code, message)
 
 
 class _DasHttp:
@@ -214,8 +214,16 @@ class DasBackend:
             _RESULT_PATH.format(project=self._project(creds), conn=conn), {"execute_id": exec_id}
         )
         # 空壳检测：未激活过的连接（或会话失效）会返回 200 空响应（无报错）——
-        # retry_login 自愈一次后整链重试；5018 同走此路
+        # retry_login 自愈一次后整链重试；5018 同走此路。
+        # 无密码（v2 建议不存）时无法自愈——fail-fast 引导，避免空密码 login 挂死。
         if not (result.get("metadata") or result.get("columnValues") or result.get("executeStatus")):
+            if not creds.password:
+                raise _die(
+                    "GAUSSDB_DATA_MCP_DAS_SESSION_STALE",
+                    "DAS session is stale and no password is configured for self-heal.",
+                    hint="Re-activate the connection in the DAS console, or provide "
+                         "user/password in the instance entry so the MCP can retry_login.",
+                )
             self._relogin(creds, http, conn)
             resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
             exec_id = resp.get("executeId")

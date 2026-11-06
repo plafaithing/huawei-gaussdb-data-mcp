@@ -188,7 +188,11 @@ class DasBackend:
         return replace(creds, das_connection_id=new_id)
 
     def execute(self, creds: DbCredentials, settings: Any, sql: str) -> dict[str, Any]:
-        """两步异步：执行受理 → 立即取结果。返回原始驼峰响应 dict。"""
+        """两步异步：执行受理 → 立即取结果。返回原始驼峰响应 dict。
+
+        硬约束（研发 2026-11-06 确认）：受理与取结果两个接口之间**不得有任何
+        时间间隔**——结果有时效，本方法内部禁止插入 sleep/节流/其他逻辑。
+        """
         if not creds.dbname:
             raise _die("GAUSSDB_DATA_MCP_DAS_NO_DATABASE", "das driver requires database_name.")
         if not creds.das_connection_id:

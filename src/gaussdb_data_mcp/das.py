@@ -38,8 +38,8 @@ _REGISTER_PATH = "/v3/{project}/instances/{iid}/db-users"
 _REGISTER_DATASTORE = "gaussdbv5"
 _IAM_HOST = "iam.myhuaweicloud.com"
 _TIMEOUT = 30
-# DDL 语句识别（大小写不敏感）：pg 系统库中执行 DDL 需要 panelKey（见 execute 注释）
-_DDL_RE = re.compile(r"^\s*(CREATE|DROP|ALTER|TRUNCATE|COMMENT|RENAME)\b", re.IGNORECASE)
+# 跨库 DDL 语句识别（大小写不敏感）：此类语句必须携带 panelKey（survey/07 实测）
+_CROSS_DB_DDL_RE = re.compile(r"^\s*(CREATE|DROP)\s+DATABASE\b", re.IGNORECASE)
 
 
 def _url_quote(s: str) -> str:

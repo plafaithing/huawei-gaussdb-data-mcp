@@ -220,6 +220,7 @@ def test_panel_key_only_for_cross_db_ddl():
 
 def test_list_user_databases_status_ready(monkeypatch, tmp_path):
     # dbname 已是用户库 → status=ready，无 guidance（直接使用）
+    import asyncio
     import json
     cred = tmp_path / 'cred.json'
     cred.write_text(json.dumps({'ak': 'A', 'sk': 'S', 'region': 'cn-north-4',

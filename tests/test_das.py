@@ -139,7 +139,7 @@ def test_blank_shell_self_heal():
     b = _backend(http)
     cur = das_mod.DasCursor(b, _creds(), _settings())
     cur.execute("SELECT 1")
-    assert http.calls[2][0].endswith("login")
+    assert "login-actions" in http.calls[2][0]
     assert len(cur.fetchall()) == 2
 
 

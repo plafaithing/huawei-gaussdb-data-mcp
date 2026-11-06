@@ -254,23 +254,21 @@ class DasBackend:
             raise _die("GAUSSDB_DATA_MCP_SQL_ERROR", f"DAS SQL error: {err}")
 
     def _relogin(self, creds: DbCredentials, http: _DasHttp, conn: str) -> None:
-        """会话自愈：login(username-only)——DAS 用注册时托管的密码，**零密码输入**。
-
-        仅当 DAS 报业务错（如未存密码/密码已改）且本地有 password 时才降级
-        RetryLoginInfo（带密码重存）。
-        """
+        """会话自愈：**有密码时优先 retry_login（带密码，实测唯一可靠的激活方式）**；
+        username-only login 200 空体不可信（实测无法真正激活）。password 为空才降级
+        username-only（尽力而为），失败由上层空壳检测兜底报错。"""
         with self._lock:
-            resp = http.post(
-                _LOGIN_PATH.format(project=self._project(creds), conn=conn),
-                {"login": {"username": creds.user}},
-            )
-            failed = bool(resp.get("errorCodeStr")) or resp.get("_status", 200) >= 400
-            if failed and creds.password:
+            if creds.password:
                 http.post(
                     _LOGIN_PATH.format(project=self._project(creds), conn=conn),
                     {"retry_login": {"username": creds.user, "password": creds.password,
                                      "is_save_password": True}},
                 )
+                return
+            http.post(
+                _LOGIN_PATH.format(project=self._project(creds), conn=conn),
+                {"login": {"username": creds.user}},
+            )
 
 
 class DasConnection:

@@ -7,6 +7,7 @@ add_tool 注册（MCPServer 实例是函数局部变量，勿用模块级装饰�
 """
 
 import asyncio
+import re
 import threading
 from typing import Any
 
@@ -116,7 +117,37 @@ def _run_channel(query: str, channel: ToolRisk, instance: str | None = None) -> 
         raise
     except Exception as exc:
         raise _exec_failed(exc) from exc
-    return {"statement_kind": result.kind, "rows_affected": affected}
+    out: dict[str, Any] = {"statement_kind": result.kind, "rows_affected": affected}
+    # das 轨受理 success ≠ 生效（survey/07）：DDL 后必须查询验证创建结果（用户规则）
+    if settings.driver == "das" and channel is ToolRisk.DANGEROUS:
+        try:
+            out["verified"] = _das_verify_database(creds, settings, query)
+        except Exception:
+            out["verified"] = None  # 验证失败不吞执行结果，如实标注 None
+    return out
+
+
+_DB_DDL_RE = re.compile(
+    r"^\s*(CREATE|DROP)\s+DATABASE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?[\"']?([A-Za-z_][\w$]*)",
+    re.IGNORECASE,
+)
+
+
+def _das_verify_database(creds: DbCredentials, settings: DataMcpSettings, query: str) -> bool | None:
+    """CREATE/DROP DATABASE 后查 pg_database 确认生效；其他 DDL 返回 None（不验证）。"""
+    m = _DB_DDL_RE.match(query)
+    if not m:
+        return None
+    action, name = m.group(1).upper(), m.group(2)
+    with _pool(settings).read_connection(creds, settings=settings) as conn:
+        with _cursor(conn) as cur:
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
+            exists = cur.fetchone() is not None
+    if action == "CREATE":
+        return exists
+    if action == "DROP":
+        return not exists
+    return None
 
 
 @guard(risk=ToolRisk.READ)

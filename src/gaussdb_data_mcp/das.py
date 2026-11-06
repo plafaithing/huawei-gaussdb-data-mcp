@@ -31,7 +31,7 @@ from .credentials import DbCredentials
 
 _EXECUTE_PATH = "/v3/{project}/connections/{conn}/async-execute-sql-without-key"
 _RESULT_PATH = "/v3/{project}/connections/{conn}/get-execute-result-without-key"
-_LOGIN_PATH = "/v3/{project}/connections/{conn}/login"
+_LOGIN_PATH = "/v3/{project}/connections/{conn}/login-actions"
 _REGISTER_PATH = "/v3/{project}/instances/{iid}/db-users"
 _REGISTER_DATASTORE = "gaussdbv5"
 _IAM_HOST = "iam.myhuaweicloud.com"
@@ -103,9 +103,9 @@ class _DasHttp:
         )
         try:
             return resp.json()
-        except ValueError as exc:
-            raise _die("GAUSSDB_DATA_MCP_DAS_HTTP",
-                       f"DAS returned non-JSON HTTP {resp.status_code}") from exc
+        except ValueError:
+            # login-actions 等接口成功时返回 200 空体——非 JSON 不视为错误
+            return {"_status": resp.status_code, "_text": resp.text[:200]}
 
 
 class DasBackend:
@@ -214,16 +214,8 @@ class DasBackend:
             _RESULT_PATH.format(project=self._project(creds), conn=conn), {"execute_id": exec_id}
         )
         # 空壳检测：未激活过的连接（或会话失效）会返回 200 空响应（无报错）——
-        # retry_login 自愈一次后整链重试；5018 同走此路。
-        # 无密码（v2 建议不存）时无法自愈——fail-fast 引导，避免空密码 login 挂死。
+        # login(username-only) 自愈（DAS 用托管密码，零密码输入）后整链重试；5018 同走此路
         if not (result.get("metadata") or result.get("columnValues") or result.get("executeStatus")):
-            if not creds.password:
-                raise _die(
-                    "GAUSSDB_DATA_MCP_DAS_SESSION_STALE",
-                    "DAS session is stale and no password is configured for self-heal.",
-                    hint="Re-activate the connection in the DAS console, or provide "
-                         "user/password in the instance entry so the MCP can retry_login.",
-                )
             self._relogin(creds, http, conn)
             resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
             exec_id = resp.get("executeId")
@@ -238,15 +230,23 @@ class DasBackend:
         return result
 
     def _relogin(self, creds: DbCredentials, http: _DasHttp, conn: str) -> None:
+        """会话自愈：login(username-only)——DAS 用注册时托管的密码，**零密码输入**。
+
+        仅当 DAS 报业务错（如未存密码/密码已改）且本地有 password 时才降级
+        RetryLoginInfo（带密码重存）。
+        """
         with self._lock:
-            body = {
-                "retry_login": {
-                    "username": creds.user,
-                    "password": creds.password,
-                    "is_save_password": True,
-                }
-            }
-            http.post(_LOGIN_PATH.format(project=self._project(creds), conn=conn), body)
+            resp = http.post(
+                _LOGIN_PATH.format(project=self._project(creds), conn=conn),
+                {"login": {"username": creds.user}},
+            )
+            failed = bool(resp.get("errorCodeStr")) or resp.get("_status", 200) >= 400
+            if failed and creds.password:
+                http.post(
+                    _LOGIN_PATH.format(project=self._project(creds), conn=conn),
+                    {"retry_login": {"username": creds.user, "password": creds.password,
+                                     "is_save_password": True}},
+                )
 
 
 class DasConnection:

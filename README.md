@@ -345,7 +345,47 @@ EIP / 安全组规则）见官方手册
 > `get_instance` 取最新地址后更新本文件），或直接采用上面的实例域名方案（解析自动跟随，
 > 无需任何编排）。该能力已记录 backlog。
 
-### 3.3 tokens.json（HTTP 客户端鉴权）
+### 3.3 DAS 传输轨（`GAUSSDB_DATA_MCP_DRIVER=das`，SQL over 管控面 HTTPS）
+
+除 DB 协议轨（psycopg2/pyodbc，要求 MCP 与数据库网络可达）外，还支持 **DAS 轨**：SQL
+经数据管理服务（DAS）的管控面 HTTPS 接口转发执行——**数据库端口零公网可达**，MCP 可
+部署在任意能访问华为云管控面的位置（本地 Windows/Linux 均可，无需 VPC/专线/EIP）。
+
+**credentials.json（das 轨结构，0600、热轮换）**：
+
+```json
+{
+  "ak": "...", "sk": "...", "region": "北京四",
+  "default_instance": "<instance_id>",
+  "instances": {
+    "<instance_id>": {
+      "das_connection_id": "<DAS 连接 id>",
+      "dbname": "mydb", "schema": "dbe_alert",
+      "user": "mcp_ro", "password": "..."
+    }
+  }
+}
+```
+
+- `ak`/`sk`/`region`（支持中文区域名，自动映射 code）；`project_id` **免配置**（IAM 自动查询并缓存）
+- `das_connection_id`：DAS 连接 id（控制台登录实例产生，或 `RegisterDbUser` 注册产生——该接口现网未对 GaussDB 开放，测试环境可用；缺失时 das 轨自动注册）
+- `dbname` **已是用户库时直接使用**；落在系统库（postgres 等）时首次调用 `list_user_databases` 工具获取选择/建库引导
+- `user`/`password`：连接未激活时 das 轨自动 `retry_login`（带密码，实测唯一可靠激活方式）；建议保留以启用全自动自愈
+
+**运行期自动机制**（无需配置）：
+
+| 机制 | 行为 |
+|---|---|
+| panelKey | pg 库执行 `CREATE/DROP DATABASE` 自动携带（否则 DAS 包事务吞错伪装成功——GaussDB 禁止事务中建库） |
+| errorMessage fail-fast | DAS 把 SQL 错误吞进 errorMessage 且状态层全"成功"——非空即抛 `GAUSSDB_DATA_MCP_SQL_ERROR` |
+| verified | CREATE/DROP DATABASE 后自动查 pg_database 确认生效（true/false） |
+| 空壳自愈 | 会话失效（取结果空壳）自动 retry_login 并重试一次 |
+
+**使用纪律**（重要）：DAS 对连接有调用频率保护（超限后**无响应式封锁**，不返回 429），
+控制台界面与 API **共享同一连接配额**——保持低频使用，请求挂死时**不要重试**（等待或
+重建连接）；业务操作一律在用户库执行，系统库（postgres 等）仅用于查系统目录与建库。
+
+### 3.4 tokens.json（HTTP 客户端鉴权）
 
 ```json
 {

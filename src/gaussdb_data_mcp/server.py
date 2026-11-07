@@ -85,6 +85,7 @@ def build_sql_server() -> MCPServer:
         connection_tools.is_database_connected,
         connection_tools.get_connection_info,
         connection_tools.list_user_databases,
+        connection_tools.register_das_connection,
     ):
         server.add_tool(tool_fn)
 

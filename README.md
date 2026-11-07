@@ -405,7 +405,7 @@ EIP / 安全组规则）见官方手册
   scheme 大小写不敏感（`bearer` 与 `Bearer` 等价，RFC 7235）；
   比较用常数时间算法，不泄露 token 内容。
 
-### 3.4 guardrails.yaml（可选规则）
+### 3.5 guardrails.yaml（可选规则）
 
 ```yaml
 rules:

@@ -1,6 +1,3 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 """SQL 白名单分类器：把单条 SQL 分类为 READ / WRITE / DANGEROUS，其余一律拒绝。
 
 设计（survey/01 §5、survey/04 §7.1）：
@@ -19,7 +16,6 @@ EMPTY / NUL_BYTE / TOO_LONG / MULTI_STATEMENT / NOT_WHITELISTED / FORBIDDEN_KEYW
 """
 
 from dataclasses import dataclass
-from typing import NoReturn, cast
 
 import sqlparse
 from huaweicloud_mcp_core import ToolRisk
@@ -38,30 +34,10 @@ _DDL_FIRST = frozenset(
 # 这些词作为语句首关键词的形态本身会被下面的首关键词门拦截。
 _UTILITY_KEYWORDS = frozenset(
     {
-        "PREPARE",
-        "EXECUTE",
-        "COPY",
-        "CALL",
-        "LOCK",
-        "VACUUM",
-        "REINDEX",
-        "CLUSTER",
-        "REFRESH",
-        "DISCARD",
-        "LISTEN",
-        "NOTIFY",
-        "LOAD",
-        "IMPORT",
-        "EXPORT",
-        "RESET",
-        "BEGIN",
-        "COMMIT",
-        "ROLLBACK",
-        "ABORT",
-        "SAVEPOINT",
-        "RELEASE",
-        "CHECKPOINT",
-        "SECURITY",
+        "PREPARE", "EXECUTE", "COPY", "CALL", "LOCK", "VACUUM", "REINDEX",
+        "CLUSTER", "REFRESH", "DISCARD", "LISTEN", "NOTIFY", "LOAD", "IMPORT",
+        "EXPORT", "RESET", "BEGIN", "COMMIT", "ROLLBACK", "ABORT",
+        "SAVEPOINT", "RELEASE", "CHECKPOINT", "SECURITY",
     }
 )
 _SCAN_FOR_READ = _WRITE_FIRST | _DDL_FIRST | _UTILITY_KEYWORDS | {"INTO"}
@@ -70,34 +46,19 @@ _SCAN_FOR_WRITE = _DDL_FIRST | _UTILITY_KEYWORDS
 # survey/05（AWS mysql-mcp 借鉴）：函数级与完整性级补充拒绝
 _DANGEROUS_FUNCTIONS = frozenset(
     {
-        "PG_SLEEP",
-        "PG_READ_FILE",
-        "PG_READ_BINARY_FILE",
-        "PG_READ_SERVER_FILES",
-        "PG_STAT_FILE",
-        "DBLINK",
-        "DBLINK_EXEC",
-        "LO_IMPORT",
-        "LO_EXPORT",
-        "SET_CONFIG",
-        "PG_TERMINATE_BACKEND",
-        "PG_CANCEL_BACKEND",
-        "PG_RELOAD_CONF",
+        "PG_SLEEP", "PG_READ_FILE", "PG_READ_BINARY_FILE", "PG_READ_SERVER_FILES",
+        "PG_STAT_FILE", "DBLINK", "DBLINK_EXEC", "LO_IMPORT", "LO_EXPORT",
+        "SET_CONFIG", "PG_TERMINATE_BACKEND", "PG_CANCEL_BACKEND", "PG_RELOAD_CONF",
         # 咨询锁：会话级形态持有到会话结束——写通道连接用完即关无危害，
         # 但拦截在 READ/WRITE 通道统一执行，不依赖调用方连接生命周期。
-        "PG_ADVISORY_LOCK",
-        "PG_TRY_ADVISORY_LOCK",
-        "PG_ADVISORY_XACT_LOCK",
-        "PG_TRY_ADVISORY_XACT_LOCK",
+        "PG_ADVISORY_LOCK", "PG_TRY_ADVISORY_LOCK",
+        "PG_ADVISORY_XACT_LOCK", "PG_TRY_ADVISORY_XACT_LOCK",
     }
 )
 _SENSITIVE_SESSION_VARS = frozenset(
     {
-        "SESSION_REPLICATION_ROLE",
-        "ROW_SECURITY",
-        "SYNCHRONOUS_COMMIT",
-        "ZERO_DAMAGED_PAGES",
-        "ACCEPT_FINITE_FLOATS",
+        "SESSION_REPLICATION_ROLE", "ROW_SECURITY", "SYNCHRONOUS_COMMIT",
+        "ZERO_DAMAGED_PAGES", "ACCEPT_FINITE_FLOATS",
     }
 )
 
@@ -108,7 +69,7 @@ class SqlClassification:
     kind: str  # 首关键词（大写），供审计与结果展示
 
 
-def _reject(code: str, message: str, hint: str | None = None) -> NoReturn:
+def _reject(code: str, message: str, hint: str | None = None) -> None:
     raise McpToolError(f"GAUSSDB_DATA_MCP_{code}", message, hint=hint)
 
 
@@ -145,7 +106,9 @@ def _first_keyword(statement: sqlparse.sql.Statement) -> str | None:
 
 def _keyword_tokens(tokens: list[sqlparse.sql.Token]) -> set[str]:
     """语句内全部 Keyword 组 token 的大写值（注释/字符串/标识符天然排除）。"""
-    return {token.value.upper() for token in tokens if token.ttype is not None and token.is_keyword}
+    return {
+        token.value.upper() for token in tokens if token.ttype is not None and token.is_keyword
+    }
 
 
 def _identifier_value(token: sqlparse.sql.Token) -> str | None:
@@ -162,9 +125,9 @@ def _identifier_value(token: sqlparse.sql.Token) -> str | None:
     if token.ttype is None:
         return None
     if token.ttype in sqlparse.tokens.Name:
-        return cast("str", token.value).strip('`"').upper()
+        return token.value.strip('`"').upper()
     if token.ttype in sqlparse.tokens.String.Symbol:
-        return cast("str", token.value).strip('"`').upper()
+        return token.value.strip('"`').upper()
     return None
 
 
@@ -237,7 +200,7 @@ def classify_sql(sql: str, *, max_sql_chars: int = DEFAULT_MAX_SQL_CHARS) -> Sql
     if len(sql) > max_sql_chars:
         _reject("TOO_LONG", f"SQL exceeds {max_sql_chars} characters.")
 
-    statements: list[sqlparse.sql.Statement] = list(sqlparse.parse(sql))
+    statements = sqlparse.parse(sql)
     # 语句终结分号之后还允许存在的只有空白；注释或其他任何 token 都视为多语句。
     # 必须在过滤纯注释 statement 之前做：sqlparse 会把 ``SELECT 1; /* c */`` 的尾注释
     # 切成第二个 statement，若先过滤再检查就会漏放。
@@ -271,7 +234,7 @@ def classify_sql(sql: str, *, max_sql_chars: int = DEFAULT_MAX_SQL_CHARS) -> Sql
     if _has_unicode_escape(tokens):
         _reject(
             "FORBIDDEN_KEYWORD",
-            'Unicode-escaped identifiers (U&"...") are not supported.',
+            "Unicode-escaped identifiers (U&\"...\") are not supported.",
         )
 
     # survey/05：敏感会话变量任何通道拒绝（含 DDL——防 ALTER ... SET 关完整性控制）

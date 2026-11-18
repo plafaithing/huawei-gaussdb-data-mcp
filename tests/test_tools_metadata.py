@@ -1,6 +1,3 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 """tools/metadata.py 单元测试：mock 池层，专注标识符校验与参数化查询。
 
 错误断言说明与 test_tools_sql.py 一致：@guard 包装后 McpToolError 不再向上
@@ -50,7 +47,9 @@ def pool_factory():
             close=lambda: None,
         )
         conn = SimpleNamespace(cursor=lambda: cursor)
-        sql_tools._POOL = SimpleNamespace(read_connection=lambda creds, settings: _Ctx(conn))
+        sql_tools._POOL = SimpleNamespace(
+            read_connection=lambda creds, settings: _Ctx(conn)
+        )
         return calls
 
     yield _install
@@ -87,7 +86,9 @@ async def test_list_schemas(pool_factory, fake_db_creds):
 
 
 async def test_list_tables_parameterized(pool_factory, fake_db_creds):
-    calls = pool_factory([("orders", "BASE TABLE")], (("table_name",), ("table_type",)))
+    calls = pool_factory(
+        [("orders", "BASE TABLE")], (("table_name",), ("table_type",))
+    )
     result = await meta.list_tables(schema="public")
     assert result["rows"] == [["orders", "BASE TABLE"]]
     # execute 第二参是参数元组，无字符串拼接
@@ -97,19 +98,28 @@ async def test_list_tables_parameterized(pool_factory, fake_db_creds):
 
 async def test_describe_table_parameterized(pool_factory, fake_db_creds):
     calls = pool_factory(
-        [("id", "integer", "NO", None)],
-        (("column_name",), ("data_type",), ("is_nullable",), ("column_default",)),
+        [("id", "integer", "NO", None, None)],
+        (
+            ("column_name",),
+            ("data_type",),
+            ("is_nullable",),
+            ("column_default",),
+            ("column_comment",),
+        ),
     )
     result = await meta.describe_table(schema="public", table="orders")
-    assert result["rows"] == [["id", "integer", "NO", None]]
+    assert result["rows"] == [["id", "integer", "NO", None, None]]
     assert calls[0][1] == ("public", "orders")
-    assert "table_schema = %s AND table_name = %s" in calls[0][0]
+    assert "c.table_schema = %s AND c.table_name = %s" in calls[0][0]
+    assert "col_description" in calls[0][0]  # 列注释（issue 清单 #2）
 
 
 async def test_list_tables_pyodbc_placeholder(pool_factory, fake_db_creds, monkeypatch):
     # pyodbc 轨占位符是 ?，参数仍以独立元组传递（无字符串拼接）——对调用方透明
     monkeypatch.setenv("GAUSSDB_DATA_MCP_DRIVER", "pyodbc")
-    calls = pool_factory([("orders", "BASE TABLE")], (("table_name",), ("table_type",)))
+    calls = pool_factory(
+        [("orders", "BASE TABLE")], (("table_name",), ("table_type",))
+    )
     result = await meta.list_tables(schema="public")
     assert result["rows"] == [["orders", "BASE TABLE"]]
     assert "table_schema = ?" in calls[0][0]
@@ -132,16 +142,13 @@ async def test_raw_db_exception_mapped(pool_factory, fake_db_creds):
     assert _error_code(await meta.list_schemas()) == "GAUSSDB_DATA_MCP_EXEC_FAILED"
 
 
-@pytest.mark.parametrize(
-    "bad",
-    [
-        "bad name; DROP TABLE t",
-        "sch-ema",
-        "",
-        "1abc",
-        "sch\n",
-    ],
-)
+@pytest.mark.parametrize("bad", [
+    "bad name; DROP TABLE t",
+    "sch-ema",
+    "",
+    "1abc",
+    "sch\n",
+])
 async def test_rejects_bad_identifier(bad):
     # 五类非法标识符（注入尝试/连字符/空串/首数字/尾部换行）对三个工具的参数位全拒；
     # 尾部换行条目锁定尾锚 \Z：$ 会放过 "sch\n"；

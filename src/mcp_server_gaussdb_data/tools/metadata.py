@@ -1,6 +1,3 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 """元数据工具：schema / 表 / 字段浏览（全部 READ，参数化查询，标识符白名单校验）。
 
 注册模式与 tools/sql.py 一致：@guard 裸函数，由 server.build_sql_server 统一
@@ -16,8 +13,9 @@ from typing import Any
 from huaweicloud_mcp_core import ToolRisk, guard
 from huaweicloud_mcp_core.errors import McpToolError
 
-from ..client.credentials import DbCredentials
-from ..client.drivers import cursor, get_driver
+from ..credentials import DbCredentials
+from ..db import _cursor
+from ..drivers import get_driver
 from .sql import _exec_failed, _format_rows, _pool, _settings
 
 # GaussDB 对象名允许 $（A 兼容模式，survey/03），故白名单含之；
@@ -34,16 +32,14 @@ def _validate_identifier(value: str, name: str) -> str:
     return value
 
 
-def _query(sql: str, params: tuple[str, ...]) -> dict[str, Any]:
+def _query(sql: str, params: tuple, instance: str | None = None) -> dict[str, Any]:
     settings = _settings()
-    creds = DbCredentials.load(settings)
+    creds = DbCredentials.load(settings, instance)
     try:
-        with (
-            _pool(settings).read_connection(creds, settings=settings) as conn,
-            cursor(conn) as cur,
-        ):
-            cur.execute(sql, params)
-            return _format_rows(cur, settings)
+        with _pool(settings).read_connection(creds, settings=settings) as conn:
+            with _cursor(conn) as cur:
+                cur.execute(sql, params)
+                return _format_rows(cur, settings)
     except McpToolError:
         raise
     except Exception as exc:
@@ -51,18 +47,18 @@ def _query(sql: str, params: tuple[str, ...]) -> dict[str, Any]:
 
 
 @guard(risk=ToolRisk.READ)
-async def list_schemas() -> dict[str, Any]:
+async def list_schemas(instance: str | None = None) -> dict[str, Any]:
     """List database schemas visible to the MCP account.
 
     Scenario: discover the schema layout before picking tables.
     """
     return await asyncio.to_thread(
-        _query, "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name", ()
+        _query, "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name", (), instance
     )
 
 
 @guard(risk=ToolRisk.READ)
-async def list_tables(schema: str = "public") -> dict[str, Any]:
+async def list_tables(schema: str = "public", instance: str | None = None) -> dict[str, Any]:
     """List tables and views in a schema.
 
     Scenario: find candidate tables for a query.
@@ -76,13 +72,13 @@ async def list_tables(schema: str = "public") -> dict[str, Any]:
         _query,
         f"SELECT table_name, table_type FROM information_schema.tables "
         f"WHERE table_schema = {ph} ORDER BY table_name",
-        (schema,),
+        (schema,), instance,
     )
 
 
 @guard(risk=ToolRisk.READ)
-async def describe_table(schema: str, table: str) -> dict[str, Any]:
-    """Describe columns of a table: name, type, nullability, default.
+async def describe_table(schema: str, table: str, instance: str | None = None) -> dict[str, Any]:
+    """Describe columns of a table: name, type, nullability, default, comment.
 
     Scenario: understand column semantics before writing SQL.
 
@@ -95,8 +91,13 @@ async def describe_table(schema: str, table: str) -> dict[str, Any]:
     ph = get_driver().placeholder()
     return await asyncio.to_thread(
         _query,
-        f"SELECT column_name, data_type, is_nullable, column_default "
-        f"FROM information_schema.columns "
-        f"WHERE table_schema = {ph} AND table_name = {ph} ORDER BY ordinal_position",
-        (schema, table),
+        # 列注释存在 pg_description（与 information_schema 分离），经 col_description
+        # 按 (表 oid, 序号) 取——驱动无关，GaussDB 507 本地与云实例均实测可用
+        f"SELECT c.column_name, c.data_type, c.is_nullable, c.column_default, "
+        f"col_description(pc.oid, c.ordinal_position) AS column_comment "
+        f"FROM information_schema.columns c "
+        f"JOIN pg_class pc ON pc.relname = c.table_name "
+        f"JOIN pg_namespace pn ON pn.oid = pc.relnamespace AND pn.nspname = c.table_schema "
+        f"WHERE c.table_schema = {ph} AND c.table_name = {ph} ORDER BY c.ordinal_position",
+        (schema, table), instance,
     )

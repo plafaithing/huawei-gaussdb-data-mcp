@@ -1,6 +1,3 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 import pytest
 from huaweicloud_mcp_core.errors import McpToolError
 
@@ -13,7 +10,7 @@ def test_safe_defaults(monkeypatch):
     monkeypatch.delenv("MCP_SERVER_HOST", raising=False)
     monkeypatch.delenv("MCP_SERVER_PORT", raising=False)
     s = DataMcpSettings.from_env()
-    assert s.read_only is True  # core 的弱点：默认 False；我们代码级默认只读
+    assert s.read_only is True          # core 的弱点：默认 False；我们代码级默认只读
     assert s.enable_ddl is False
     assert s.server_host == "127.0.0.1"  # core 的弱点：默认 0.0.0.0；我们默认回环
     assert s.server_port == 8000
@@ -41,19 +38,16 @@ def test_bad_port_rejected(monkeypatch):
         DataMcpSettings.from_env()
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "MCP_SERVER_PORT",
-        "GAUSSDB_DATA_MCP_MAX_ROWS",
-        "GAUSSDB_DATA_MCP_MAX_CELL_CHARS",
-        "GAUSSDB_DATA_MCP_MAX_SQL_CHARS",
-        "GAUSSDB_DATA_MCP_STATEMENT_TIMEOUT_MS",
-        "GAUSSDB_DATA_MCP_POOL_MIN",
-        "GAUSSDB_DATA_MCP_POOL_MAX",
-        "GAUSSDB_DATA_MCP_DB_PORT",
-    ],
-)
+@pytest.mark.parametrize("name", [
+    "MCP_SERVER_PORT",
+    "GAUSSDB_DATA_MCP_MAX_ROWS",
+    "GAUSSDB_DATA_MCP_MAX_CELL_CHARS",
+    "GAUSSDB_DATA_MCP_MAX_SQL_CHARS",
+    "GAUSSDB_DATA_MCP_STATEMENT_TIMEOUT_MS",
+    "GAUSSDB_DATA_MCP_POOL_MIN",
+    "GAUSSDB_DATA_MCP_POOL_MAX",
+    "GAUSSDB_DATA_MCP_DB_PORT",
+])
 def test_non_integer_env_rejected(monkeypatch, name):
     # issue #1：裸 int() 对非数字报 ValueError 裸栈；统一映射为 McpToolError
     monkeypatch.setenv(name, "abc")

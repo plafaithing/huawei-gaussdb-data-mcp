@@ -1,6 +1,3 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 """GAUSSDB_DATA_MCP_* 配置。与 core 的 HUAWEICLOUD_MCP_* 心智对齐，但默认值更安全。"""
 
 import os
@@ -34,6 +31,7 @@ class DataMcpSettings:
     # 安全开关（用户决策：写能力一期可用，但代码级默认值必须安全）
     read_only: bool = True
     enable_ddl: bool = False
+    driver: str = "auto"
     # 文件
     credentials_file: str | None = None
     tokens_file: str | None = None
@@ -54,7 +52,7 @@ class DataMcpSettings:
     # 连接池
     pool_min: int = 1
     pool_max: int = 8
-    application_name: str = "gaussdb_data_mcp"
+    application_name: str = "mcp_server_gaussdb_data"
     # DB 环境变量兜底（credentials 文件优先；password 不进 repr）
     db_host: str = ""
     db_port: int = 0
@@ -71,6 +69,7 @@ class DataMcpSettings:
         settings = cls(
             read_only=_env_bool("GAUSSDB_DATA_MCP_READ_ONLY", True),
             enable_ddl=_env_bool("GAUSSDB_DATA_MCP_ENABLE_DDL", False),
+            driver=os.getenv("GAUSSDB_DATA_MCP_DRIVER", "auto").strip().lower() or "auto",
             credentials_file=os.getenv("GAUSSDB_DATA_MCP_CREDENTIALS_FILE"),
             tokens_file=os.getenv("GAUSSDB_DATA_MCP_TOKENS_FILE"),
             guardrails_config_path=os.getenv("GAUSSDB_DATA_MCP_GUARDRAILS_CONFIG"),
@@ -86,7 +85,7 @@ class DataMcpSettings:
             statement_timeout_ms=_env_int("GAUSSDB_DATA_MCP_STATEMENT_TIMEOUT_MS", "30000"),
             pool_min=_env_int("GAUSSDB_DATA_MCP_POOL_MIN", "1"),
             pool_max=_env_int("GAUSSDB_DATA_MCP_POOL_MAX", "8"),
-            application_name=os.getenv("GAUSSDB_DATA_MCP_APPLICATION_NAME", "gaussdb_data_mcp"),
+            application_name=os.getenv("GAUSSDB_DATA_MCP_APPLICATION_NAME", "mcp_server_gaussdb_data"),
             db_host=os.getenv("GAUSSDB_DATA_MCP_DB_HOST", ""),
             db_port=_env_int("GAUSSDB_DATA_MCP_DB_PORT", "0"),
             db_dbname=os.getenv("GAUSSDB_DATA_MCP_DB_DBNAME", ""),
@@ -97,6 +96,8 @@ class DataMcpSettings:
             db_sslcert=os.getenv("GAUSSDB_DATA_MCP_DB_SSLCERT"),
             db_sslkey=os.getenv("GAUSSDB_DATA_MCP_DB_SSLKEY"),
         )
+        if settings.driver not in {"auto", "psycopg2", "pyodbc", "das"}:
+            raise McpToolError("MCP_INVALID_ARGS", "GAUSSDB_DATA_MCP_DRIVER must be auto/psycopg2/pyodbc/das.")
         if not 1 <= settings.server_port <= 65535:
             raise McpToolError("MCP_INVALID_ARGS", "MCP_SERVER_PORT must be 1..65535.")
         if settings.max_rows < 1 or settings.statement_timeout_ms < 1:

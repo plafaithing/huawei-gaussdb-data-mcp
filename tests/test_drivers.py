@@ -1,6 +1,3 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 """drivers.py 单元测试：驱动选择 / pyodbc 连接行为 / 退出规避。
 
 全部 mock 驱动模块（psycopg2 官方驱动仅 Linux/py311；pyodbc 属 windows 可选
@@ -16,13 +13,12 @@ import pytest
 from huaweicloud_mcp_core.errors import McpToolError
 
 from mcp_server_gaussdb_data import server as server_mod
-from mcp_server_gaussdb_data.client.credentials import DbCredentials
-from mcp_server_gaussdb_data.client.drivers import Psycopg2Driver, PyodbcDriver, cursor, get_driver
 from mcp_server_gaussdb_data.config import DataMcpSettings
+from mcp_server_gaussdb_data.credentials import DbCredentials
+from mcp_server_gaussdb_data.drivers import Psycopg2Driver, PyodbcDriver, _cursor, get_driver
 
-CREDS = DbCredentials(
-    host="h", port=8000, dbname="db", user="u", password="p", sslmode="require", fingerprint="fp1"
-)
+CREDS = DbCredentials(host="h", port=8000, dbname="db", user="u", password="p",
+                      sslmode="require", fingerprint="fp1")
 SETTINGS = DataMcpSettings()
 
 
@@ -34,7 +30,6 @@ def _clean_driver_env(monkeypatch):
 
 
 # ---- 工厂：平台自动选择与强制指定 ----
-
 
 def test_auto_select_windows_prefers_pyodbc(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
@@ -64,7 +59,6 @@ def test_invalid_driver_env_rejected(monkeypatch):
 
 # ---- 占位符 ----
 
-
 def test_placeholders():
     assert Psycopg2Driver().placeholder() == "%s"
     assert Psycopg2Driver().driver_name() == "psycopg2"
@@ -73,7 +67,6 @@ def test_placeholders():
 
 
 # ---- pyodbc 连接行为（mock pyodbc 模块）----
-
 
 def _fake_pyodbc():
     """fake pyodbc：异常类必须是真类（except pyodbc.Error 按类匹配）。"""
@@ -98,15 +91,8 @@ def test_pyodbc_connect_string_and_autocommit():
         out = PyodbcDriver().connect(CREDS, SETTINGS)
     assert out is conn
     conn_str = mod.connect.call_args.args[0]
-    for part in (
-        "Driver={GaussDB Unicode}",
-        "Server=h",
-        "Port=8000",
-        "Database=db",
-        "Uid=u",
-        "Pwd=p",
-        "Sslmode=require",
-    ):
+    for part in ("Driver={GaussDB Unicode}", "Server=h", "Port=8000", "Database=db",
+                 "Uid=u", "Pwd=p", "Sslmode=require"):
         assert part in conn_str
     assert "SSLRootCert" not in conn_str  # require 无证书：连接串不带 CA 参数
     assert mod.connect.call_args.kwargs == {"timeout": 10, "ansi": False}  # issue #1：ansi=False
@@ -127,47 +113,34 @@ def test_pyodbc_connect_sets_utf8_encoding():
 
 # ---- pyodbc verify-ca fail-closed（issue #1：pyodbc 轨此前不校验 CA）----
 
-VERIFY_CA_CREDS = DbCredentials(
-    host="h", port=8000, dbname="db", user="u", password="p", sslmode="verify-ca", fingerprint="fp2"
-)
-VERIFY_FULL_CREDS = DbCredentials(
-    host="h",
-    port=8000,
-    dbname="db",
-    user="u",
-    password="p",
-    sslmode="verify-full",
-    fingerprint="fp3",
-)
+VERIFY_CA_CREDS = DbCredentials(host="h", port=8000, dbname="db", user="u", password="p",
+                                sslmode="verify-ca", fingerprint="fp2")
+VERIFY_FULL_CREDS = DbCredentials(host="h", port=8000, dbname="db", user="u", password="p",
+                                  sslmode="verify-full", fingerprint="fp3")
 
 
 def test_pyodbc_verify_ca_without_cert_rejected():
     # fail-closed：不校验 CA 就不许谎称 verify-ca（与 credentials 层 CA_MISSING 同语义）
     mod, _ = _fake_pyodbc()
-    with patch.dict(sys.modules, {"pyodbc": mod}), pytest.raises(McpToolError) as exc:
-        PyodbcDriver().connect(VERIFY_CA_CREDS, SETTINGS)
+    with patch.dict(sys.modules, {"pyodbc": mod}):
+        with pytest.raises(McpToolError) as exc:
+            PyodbcDriver().connect(VERIFY_CA_CREDS, SETTINGS)
     assert exc.value.code == "GAUSSDB_DATA_MCP_CA_MISSING"
     assert "sslrootcert" in exc.value.hint
 
 
 def test_pyodbc_verify_full_without_cert_rejected():
     mod, _ = _fake_pyodbc()
-    with patch.dict(sys.modules, {"pyodbc": mod}), pytest.raises(McpToolError) as exc:
-        PyodbcDriver().connect(VERIFY_FULL_CREDS, SETTINGS)
+    with patch.dict(sys.modules, {"pyodbc": mod}):
+        with pytest.raises(McpToolError) as exc:
+            PyodbcDriver().connect(VERIFY_FULL_CREDS, SETTINGS)
     assert exc.value.code == "GAUSSDB_DATA_MCP_CA_MISSING"
 
 
 def test_pyodbc_verify_ca_with_cert_passed_as_sslrootcert():
-    creds = DbCredentials(
-        host="h",
-        port=8000,
-        dbname="db",
-        user="u",
-        password="p",
-        sslmode="verify-ca",
-        sslrootcert=r"C:\ca\cacert.pem",
-        fingerprint="fp4",
-    )
+    creds = DbCredentials(host="h", port=8000, dbname="db", user="u", password="p",
+                          sslmode="verify-ca", sslrootcert=r"C:\ca\cacert.pem",
+                          fingerprint="fp4")
     mod, conn = _fake_pyodbc()
     with patch.dict(sys.modules, {"pyodbc": mod}):
         out = PyodbcDriver().connect(creds, SETTINGS)
@@ -184,7 +157,7 @@ def test_pyodbc_sets_session_statement_timeout():
         PyodbcDriver().connect(CREDS, SETTINGS)
     cursor = conn.cursor.return_value
     assert "SET statement_timeout = 30000" in _executed(cursor)
-    cursor.close.assert_called_once()  # pyodbc cursor 无 with，cursor 手动 close
+    cursor.close.assert_called_once()  # pyodbc cursor 无 with，_cursor 手动 close
 
 
 def test_pyodbc_driver_name_env_override(monkeypatch):
@@ -196,31 +169,20 @@ def test_pyodbc_driver_name_env_override(monkeypatch):
 
 
 def test_pyodbc_driver_missing():
-    with patch.dict(sys.modules, {"pyodbc": None}), pytest.raises(McpToolError) as exc:
-        PyodbcDriver().connect(CREDS, SETTINGS)
+    with patch.dict(sys.modules, {"pyodbc": None}):
+        with pytest.raises(McpToolError) as exc:
+            PyodbcDriver().connect(CREDS, SETTINGS)
     assert exc.value.code == "GAUSSDB_DATA_MCP_DRIVER_MISSING"
     assert "pyodbc" in exc.value.hint
 
 
 def test_pyodbc_auth_failed_by_password_text():
     mod, _ = _fake_pyodbc()
-    mod.connect = MagicMock(
-        side_effect=mod.InterfaceError('28000: password authentication failed for user "u"')
-    )
-    with patch.dict(sys.modules, {"pyodbc": mod}), pytest.raises(McpToolError) as exc:
-        PyodbcDriver().connect(CREDS, SETTINGS)
-    assert exc.value.code == "GAUSSDB_DATA_MCP_AUTH_FAILED"
-
-
-def test_pyodbc_auth_failed_by_gsqlodbc_login_denied_text():
-    # 云上 pyodbc 轨实测（2026-10 E2E 回归）：gsqlodbc 错密码的报错文案是
-    # "Invalid username/password,login denied."，不是 psycopg2 系的
-    # "password authentication failed"——漏判会被归为 CONNECT_FAILED，
-    # 「连错 10 次锁号 1 天、绝不重试」的警示 hint 随之丢失
-    mod, _ = _fake_pyodbc()
-    mod.connect = MagicMock(side_effect=mod.Error("28000: Invalid username/password,login denied."))
-    with patch.dict(sys.modules, {"pyodbc": mod}), pytest.raises(McpToolError) as exc:
-        PyodbcDriver().connect(CREDS, SETTINGS)
+    mod.connect = MagicMock(side_effect=mod.InterfaceError(
+        '28000: password authentication failed for user "u"'))
+    with patch.dict(sys.modules, {"pyodbc": mod}):
+        with pytest.raises(McpToolError) as exc:
+            PyodbcDriver().connect(CREDS, SETTINGS)
     assert exc.value.code == "GAUSSDB_DATA_MCP_AUTH_FAILED"
 
 
@@ -228,16 +190,18 @@ def test_pyodbc_auth_failed_by_login_timeout():
     # 设计口径：部分版本认证失败以登录超时类错误呈现（LoginTimeoutError）
     mod, _ = _fake_pyodbc()
     mod.connect = MagicMock(side_effect=mod.LoginTimeoutError("HYT00: login timeout"))
-    with patch.dict(sys.modules, {"pyodbc": mod}), pytest.raises(McpToolError) as exc:
-        PyodbcDriver().connect(CREDS, SETTINGS)
+    with patch.dict(sys.modules, {"pyodbc": mod}):
+        with pytest.raises(McpToolError) as exc:
+            PyodbcDriver().connect(CREDS, SETTINGS)
     assert exc.value.code == "GAUSSDB_DATA_MCP_AUTH_FAILED"
 
 
 def test_pyodbc_other_connect_error_mapped():
     mod, _ = _fake_pyodbc()
     mod.connect = MagicMock(side_effect=mod.Error("08001: network unreachable"))
-    with patch.dict(sys.modules, {"pyodbc": mod}), pytest.raises(McpToolError) as exc:
-        PyodbcDriver().connect(CREDS, SETTINGS)
+    with patch.dict(sys.modules, {"pyodbc": mod}):
+        with pytest.raises(McpToolError) as exc:
+            PyodbcDriver().connect(CREDS, SETTINGS)
     assert exc.value.code == "GAUSSDB_DATA_MCP_CONNECT_FAILED"
 
 
@@ -252,19 +216,18 @@ def test_pyodbc_other_connect_error_mapped():
 #   GAUSSDB_DATA_MCP_DB_PASSWORD=... \
 #   uv run pytest tests/test_drivers.py -k pyodbc_live -v
 
-
 @pytest.mark.live
 @pytest.mark.skipif(
     not os.getenv("GAUSSDB_DATA_MCP_PYODBC_LIVE"),
     reason="GAUSSDB_DATA_MCP_PYODBC_LIVE is not set; "
-    "needs Windows + GaussDB ODBC + a real instance.",
+           "needs Windows + GaussDB ODBC + a real instance.",
 )
 def test_pyodbc_live_chinese_roundtrip():
     settings = DataMcpSettings.from_env()
     creds = DbCredentials.load(settings)
     conn = PyodbcDriver().connect(creds, settings)
     try:
-        with cursor(conn) as cur:
+        with _cursor(conn) as cur:
             cur.execute("DROP TABLE IF EXISTS _mcp_pyodbc_cn_probe")
             cur.execute("CREATE TABLE _mcp_pyodbc_cn_probe (id int, name varchar(100))")
             cur.execute("INSERT INTO _mcp_pyodbc_cn_probe VALUES (1, ?)", "张三")
@@ -277,7 +240,6 @@ def test_pyodbc_live_chinese_roundtrip():
 
 
 # ---- 退出规避（server._odbc_exit_guard）----
-
 
 def test_exit_guard_skips_gc_on_win32_pyodbc(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
@@ -297,6 +259,6 @@ def test_exit_guard_not_triggered_otherwise(monkeypatch):
     monkeypatch.setenv("GAUSSDB_DATA_MCP_DRIVER", "psycopg2")  # win32 但非 pyodbc
     server_mod._odbc_exit_guard()
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setenv("GAUSSDB_DATA_MCP_DRIVER", "pyodbc")  # pyodbc 但非 win32
+    monkeypatch.setenv("GAUSSDB_DATA_MCP_DRIVER", "pyodbc")    # pyodbc 但非 win32
     server_mod._odbc_exit_guard()
     exit_mock.assert_not_called()

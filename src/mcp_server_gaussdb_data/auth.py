@@ -1,6 +1,3 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 """HTTP 传输的 Bearer 鉴权中间件（core 没有的能力——两个 example 都在 0.0.0.0 裸奔）。
 
 - tokens 文件每次请求热读（与凭证同款轮换语义）。
@@ -14,21 +11,20 @@
 import hmac
 
 from huaweicloud_mcp_core.errors import McpToolError
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .audit import client_name
-from .client.credentials import load_tokens
+from .credentials import load_tokens
 
 _WWW_AUTH = (b"www-authenticate", b'Bearer realm="gaussdb-data-mcp"')
 _RETRY_AFTER = (b"retry-after", b"5")
 
 
 class BearerAuthMiddleware:
-    def __init__(self, app: ASGIApp, *, tokens_file: str) -> None:
+    def __init__(self, app, *, tokens_file: str) -> None:
         self.app = app
         self.tokens_file = tokens_file
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -42,11 +38,8 @@ class BearerAuthMiddleware:
             tokens = load_tokens(self.tokens_file)
         except McpToolError:
             await send(
-                {
-                    "type": "http.response.start",
-                    "status": 503,
-                    "headers": [_RETRY_AFTER, (b"content-length", b"0")],
-                }
+                {"type": "http.response.start", "status": 503,
+                 "headers": [_RETRY_AFTER, (b"content-length", b"0")]}
             )
             await send({"type": "http.response.body", "body": b""})
             return
@@ -60,11 +53,8 @@ class BearerAuthMiddleware:
         )
         if matched is None:
             await send(
-                {
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [_WWW_AUTH, (b"content-length", b"0")],
-                }
+                {"type": "http.response.start", "status": 401,
+                 "headers": [_WWW_AUTH, (b"content-length", b"0")]}
             )
             await send({"type": "http.response.body", "body": b""})
             return

@@ -1,6 +1,3 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 import json
 import subprocess
 import sys
@@ -11,7 +8,7 @@ import pytest
 from huaweicloud_mcp_core.errors import McpToolError
 
 from mcp_server_gaussdb_data.auth import BearerAuthMiddleware
-from mcp_server_gaussdb_data.client.credentials import load_tokens
+from mcp_server_gaussdb_data.credentials import load_tokens
 
 
 class _DummyApp:
@@ -40,7 +37,8 @@ async def _call(app, token: str | None, *, scheme: str = "Bearer"):
         messages.append(message)
 
     headers = [(b"authorization", f"{scheme} {token}".encode())] if token else []
-    await app({"type": "http", "method": "POST", "path": "/mcp", "headers": headers}, receive, send)
+    await app({"type": "http", "method": "POST", "path": "/mcp", "headers": headers},
+              receive, send)
     return messages
 
 
@@ -65,7 +63,7 @@ async def test_token_hot_reload(tmp_path):
     app = BearerAuthMiddleware(dummy, tokens_file=path)
     assert (await _call(app, "tok_1"))[0]["status"] == 200
     _write_tokens(tmp_path, {"dify": "tok_2"})
-    assert (await _call(app, "tok_1"))[0]["status"] == 401  # 旧 token 立即失效
+    assert (await _call(app, "tok_1"))[0]["status"] == 401   # 旧 token 立即失效
     assert (await _call(app, "tok_2"))[0]["status"] == 200
 
 
@@ -105,11 +103,11 @@ def test_audit_query_truncation_only_for_query_key(tmp_path):
 
     log = tmp_path / "audit.jsonl"
     logger = SqlAuditLogger(file_path=str(log))
-    logger.emit(tool="sql_query", params={"query": "S" * 2500, "other": "x" * 300})
+    logger.emit({"tool": "sql_query", "params": {"query": "S" * 2500, "other": "x" * 300}})
     event = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
-    assert len(event["params"]["query"]) == 2000  # query 键放宽到 sql_trunc
-    assert len(event["params"]["other"]) == 200  # 其余键保持 core 的 200
-    assert event["client"] == "stdio"  # contextvar 默认值
+    assert len(event["params"]["query"]) == 2000   # query 键放宽到 sql_trunc
+    assert len(event["params"]["other"]) == 200    # 其余键保持 core 的 200
+    assert event["client"] == "stdio"              # contextvar 默认值
 
 
 async def test_audit_client_name_from_contextvar(tmp_path):
@@ -119,7 +117,7 @@ async def test_audit_client_name_from_contextvar(tmp_path):
     logger = SqlAuditLogger(file_path=str(log))
     token = client_name.set("dify")
     try:
-        logger.emit(tool="sql_query", params={"query": "SELECT 1"})
+        logger.emit({"tool": "sql_query", "params": {"query": "SELECT 1"}})
     finally:
         client_name.reset(token)
     event = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
@@ -128,13 +126,12 @@ async def test_audit_client_name_from_contextvar(tmp_path):
 
 def test_build_sql_server_wiring():
     from mcp_server_gaussdb_data.server import build_sql_server
-
     server = build_sql_server()
     assert server.name == "gaussdb-data"
 
 
 async def test_read_only_block_hint_names_project_env_var(monkeypatch):
-    # core 1.0.0 只读拦截的 message/hint 硬编码 HUAWEICLOUD_MCP_READ_ONLY（本项目无此变量）；
+    # core 1.1.1 只读拦截的 hint 硬编码 HUAWEICLOUD_MCP_READ_ONLY（本项目无此变量）；
     # SqlGuardrailsMiddleware 覆写指向 GAUSSDB_DATA_MCP_READ_ONLY 的文案（Task 7 审查 Important）。
     # 走 in-process Client 全链路：同时验证 build_sql_server 装配的是覆写子类。
     from mcp import Client
@@ -220,7 +217,6 @@ def test_load_tokens_accepts_printable_ascii(tmp_path):
 
 
 def test_core_version_pinned_for_audit_copy():
-    # audit.py 是按官方 core 1.0.0 AuditLogger（emit(**event) 关键字签名 + 200 截断）
-    # 适配的行为副本（query 键截断放宽）。core minor 升级使本测试变红 = 强制人工复核
-    # audit.py 与新版 core 的对齐（原 vendored-wheel 版 tripwire 的等价物）。
-    assert version("huaweicloud-mcp-core").startswith("1.0")
+    # audit.py 是 core 1.1.1 AuditLogger 的行为副本（query 键截断放宽）。
+    # core 升级使本测试变红 = 强制人工复核 audit.py 与新版 core 的对齐（Task 6 审查 M1）。
+    assert version("huaweicloud-mcp-core") == "1.1.1"

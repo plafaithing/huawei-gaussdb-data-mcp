@@ -3,11 +3,11 @@ name = "mcp_server_gaussdb_data"
 version = "0.1.0"
 description = "MCP Server for Huawei Cloud GaussDB (data plane: in-database SQL for AI clients)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
     "mcp>=2.0,<3",
-    "huaweicloud-mcp-core>=1.0,<2",
+    "huaweicloud-mcp-core==1.1.1",
     "sqlparse>=0.6,<0.7",
 ]
 
@@ -22,7 +22,7 @@ build-backend = "hatchling.build"
 packages = ["src/mcp_server_gaussdb_data"]
 
 [tool.uv.sources]
-huaweicloud-mcp-core = { path = "../../libs/huaweicloud_mcp_core" }
+huaweicloud-mcp-core = { path = "wheels/huaweicloud_mcp_core-1.1.1-py3-none-any.whl" }
 
 [dependency-groups]
 dev = [

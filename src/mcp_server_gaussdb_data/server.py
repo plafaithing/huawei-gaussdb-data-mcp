@@ -1,14 +1,9 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 """MCPServer 组装与运行入口。
 
 组装方式：不用 core 的 build_server（它读 HUAWEICLOUD_* 且只读默认 False、
 server 名带 huaweicloud 前缀），而是直接构造 MCPServer + SqlGuardrailsMiddleware
 （core 中间件的文案针对性子类），用我们自己的 DataMcpSettings（默认只读 True、
-默认回环监听）。规则集在 load_rules 结果上追加内置 DANGEROUS confirm 规则：
-core 1.0.0 的确认门只由规则驱动，内置规则保证危险通道默认有确认门
-（见 _DANGEROUS_CONFIRM_RULE）。
+默认回环监听）。
 """
 
 import argparse
@@ -16,54 +11,40 @@ import logging
 import os
 import sys
 
-from huaweicloud_mcp_core import ToolRisk
 from huaweicloud_mcp_core.config import McpSettings
 from huaweicloud_mcp_core.errors import McpToolError
 from huaweicloud_mcp_core.guardrails.middleware import GuardrailsMiddleware
-from huaweicloud_mcp_core.guardrails.rules import Rule, load_rules
+from huaweicloud_mcp_core.guardrails.rules import load_rules
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult
-from starlette.types import ASGIApp
 
 from .audit import SqlAuditLogger
-from .client.drivers import get_driver
 from .config import DataMcpSettings
+from .drivers import get_driver
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
-# 内置 DANGEROUS confirm 规则（安全回归修复 2026-10-23）：官方 core 1.0.0 的确认门
-# 只由规则驱动（middleware._pre_check → evaluate_rules；旧 core 1.1.1 是
-# risk is DANGEROUS 无条件 confirm），load_rules 默认零规则 → execute_sql_dangerous
-# 无 confirm 直达工具体。追加本规则让规则门天然命中危险通道；confirm=true 放行与
-# 用户 YAML 规则加严（strictest_hit：block > confirm）路径不变。
-_DANGEROUS_CONFIRM_RULE = Rule(
-    id="gaussdb-data-dangerous-confirm",
-    action="confirm",
-    message="DANGEROUS (DDL) statements require explicit confirmation.",
-    risks=(ToolRisk.DANGEROUS,),
-)
-
 
 class SqlGuardrailsMiddleware(GuardrailsMiddleware):
-    """core 文案针对性覆写：只读拦截的 message/hint 指向 GAUSSDB_DATA_MCP_READ_ONLY。
+    """core 文案针对性覆写：只读拦截的 hint 指向 GAUSSDB_DATA_MCP_READ_ONLY。
 
-    core 1.0.0 的只读拦截（guardrails/middleware.py _pre_check 内 raise
-    McpToolError("MCP_READ_ONLY", ...)）message/hint 硬编码 HUAWEICLOUD_MCP_READ_ONLY；
-    本项目变量名是 GAUSSDB_DATA_MCP_READ_ONLY，且默认只读 True，"Unset" 语义也不成立
-    （unset 仍是只读）。core 把 McpToolError 转为结果信封的唯一出口是 _error_result，
-    故只覆写它：仅改写该 code 的 message 变量名与 hint 文案；raise 路径、code、审计
-    decision 与规则评估顺序全部原样走 core。
+    core 1.1.1 的只读拦截（guardrails/middleware.py __call__ 内 raise
+    McpToolError("MCP_READ_ONLY", ...)，core 源码仅此一处使用该 code）hint 硬编码
+    HUAWEICLOUD_MCP_READ_ONLY；本项目变量名是 GAUSSDB_DATA_MCP_READ_ONLY，且默认
+    只读 True，"Unset" 语义也不成立（unset 仍是只读）。core 把 McpToolError 转为
+    结果信封的唯一出口是 _error，故只覆写它：仅改写该 code 的 hint 文案；raise
+    路径、code/message、审计 decision 与规则评估顺序全部原样走 core。
     """
 
-    def _error_result(self, error: McpToolError) -> CallToolResult:
+    def _error(self, error: McpToolError) -> CallToolResult:
         if error.code == "MCP_READ_ONLY":
             error = McpToolError(
                 error.code,
-                error.message.replace("HUAWEICLOUD_MCP_READ_ONLY", "GAUSSDB_DATA_MCP_READ_ONLY"),
+                error.message,
                 hint="Set GAUSSDB_DATA_MCP_READ_ONLY=false (restart required) "
                 "only in an approved write environment.",
             )
-        return super()._error_result(error)
+        return super()._error(error)
 
 
 def build_sql_server() -> MCPServer:
@@ -76,7 +57,7 @@ def build_sql_server() -> MCPServer:
     )
     middleware = SqlGuardrailsMiddleware(
         read_only=settings.read_only,
-        rules=[*load_rules(rules_settings), _DANGEROUS_CONFIRM_RULE],
+        rules=load_rules(rules_settings),
         audit=SqlAuditLogger(file_path=settings.audit_file),
     )
     server = MCPServer(
@@ -89,6 +70,7 @@ def build_sql_server() -> MCPServer:
         middleware=[middleware],
     )
     # 注册副作用导入：@guard 全局注册 + add_tool
+    from .tools import connection as connection_tools
     from .tools import metadata as metadata_tools
     from .tools import sql as sql_tools
 
@@ -100,6 +82,10 @@ def build_sql_server() -> MCPServer:
         metadata_tools.list_schemas,
         metadata_tools.list_tables,
         metadata_tools.describe_table,
+        connection_tools.is_database_connected,
+        connection_tools.get_connection_info,
+        connection_tools.list_user_databases,
+        connection_tools.register_das_connection,
     ):
         server.add_tool(tool_fn)
 
@@ -138,7 +124,7 @@ def main() -> None:
 
     # host 传实际监听地址：SDK 据此决定是否启用 localhost DNS rebinding 保护，
     # 非回环监听时若按默认 127.0.0.1 误判会拒绝外部客户端。
-    app: ASGIApp = server.streamable_http_app(host=settings.server_host)
+    app = server.streamable_http_app(host=settings.server_host)
     if settings.tokens_file:
         app = BearerAuthMiddleware(app, tokens_file=settings.tokens_file)
     uvicorn.run(app, host=settings.server_host, port=settings.server_port)

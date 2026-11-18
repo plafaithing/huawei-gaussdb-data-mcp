@@ -1,6 +1,3 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 """tools/sql.py 单元测试：mock ConnectionPool，专注通道锁/开关/格式化逻辑。
 
 错误断言说明：core @guard 包装后 McpToolError 不再向上 raise，而是返回
@@ -151,12 +148,9 @@ async def test_explain_rejects_non_select():
 async def test_explain_rejects_write_cte(pool_factory, fake_db_creds):
     # WITH 首关键词的写 CTE：kind 是 "WITH"，但整体 risk 是 WRITE——
     # explain 通道锁必须按 risk 拒，仅按 kind 白名单会放行
-    assert (
-        _error_code(
-            await sql_tools.explain_sql("WITH x AS (INSERT INTO t VALUES (1)) SELECT * FROM x")
-        )
-        == "GAUSSDB_DATA_MCP_RISK_MISMATCH"
-    )
+    assert _error_code(await sql_tools.explain_sql(
+        "WITH x AS (INSERT INTO t VALUES (1)) SELECT * FROM x"
+    )) == "GAUSSDB_DATA_MCP_RISK_MISMATCH"
 
 
 async def test_raw_db_exception_mapped(pool_factory, fake_db_creds):
@@ -181,7 +175,7 @@ async def test_exec_failed_message_truncated(pool_factory, fake_db_creds):
 
     class _Boom:
         def __enter__(self):
-            raise RuntimeError('relation "public.secret_table" does not exist: ' + "x" * 1000)
+            raise RuntimeError("relation \"public.secret_table\" does not exist: " + "x" * 1000)
 
         def __exit__(self, *a):
             return False

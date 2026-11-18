@@ -1,6 +1,3 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 """SQL 执行工具：三通道 + explain。
 
 通道锁：工具静态风险（core 中间件的只读拦截/confirm 门）+ 工具体内
@@ -10,28 +7,32 @@ add_tool 注册（MCPServer 实例是函数局部变量，勿用模块级装饰�
 """
 
 import asyncio
+import re
 import threading
 from typing import Any
 
 from huaweicloud_mcp_core import ToolRisk, guard
 from huaweicloud_mcp_core.errors import McpToolError
 
-from ..client.credentials import DbCredentials
-from ..client.drivers import cursor
 from ..config import DataMcpSettings
-from ..service.database import ConnectionPool
-from ..service.sql_guard import SqlClassification, classify_sql
+from ..credentials import DbCredentials
+from ..db import ConnectionPool, _cursor
+from ..sql_guard import SqlClassification, classify_sql
 
 _POOL: ConnectionPool | None = None
 _POOL_LOCK = threading.Lock()
 
 
-def _pool(settings: DataMcpSettings) -> ConnectionPool:
-    """延迟初始化：池尺寸来自环境变量（GAUSSDB_DATA_MCP_POOL_MIN/MAX）。"""
+def _pool(settings: DataMcpSettings) -> Any:
+    """延迟初始化：das 轰走 DAS 后端（无池），否则 DB 协议连接池。"""
     global _POOL
     with _POOL_LOCK:
         if _POOL is None:
-            _POOL = ConnectionPool(pool_min=settings.pool_min, pool_max=settings.pool_max)
+            if settings.driver == "das":
+                from ..das import get_das_backend
+                _POOL = get_das_backend(settings)
+            else:
+                _POOL = ConnectionPool(pool_min=settings.pool_min, pool_max=settings.pool_max)
         return _POOL
 
 
@@ -93,7 +94,7 @@ def _exec_failed(exc: Exception) -> McpToolError:
     )
 
 
-def _run_channel(query: str, channel: ToolRisk) -> dict[str, Any]:
+def _run_channel(query: str, channel: ToolRisk, instance: str | None = None) -> dict[str, Any]:
     settings = _settings()
     result = _classify_for_channel(query, channel, max_sql_chars=settings.max_sql_chars)
     if channel is ToolRisk.DANGEROUS and not settings.enable_ddl:
@@ -102,27 +103,55 @@ def _run_channel(query: str, channel: ToolRisk) -> dict[str, Any]:
             "DDL execution is disabled.",
             hint="Set GAUSSDB_DATA_MCP_ENABLE_DDL=true (with GAUSSDB_DATA_MCP_READ_ONLY=false).",
         )
-    creds = DbCredentials.load(settings)
+    creds = DbCredentials.load(settings, instance)
     try:
         if channel is ToolRisk.READ:
-            with (
-                _pool(settings).read_connection(creds, settings=settings) as conn,
-                cursor(conn) as cur,
-            ):
-                cur.execute(query)
-                if cur.description is None:
-                    return {"columns": [], "row_count": 0, "rows": [], "truncated": False}
-                return _format_rows(cur, settings)
+            with _pool(settings).read_connection(creds, settings=settings) as conn:
+                with _cursor(conn) as cur:
+                    cur.execute(query)
+                    if cur.description is None:
+                        return {"columns": [], "row_count": 0, "rows": [], "truncated": False}
+                    return _format_rows(cur, settings)
         affected = _pool(settings).run_write(creds, settings=settings, sql=query)
     except McpToolError:
         raise
     except Exception as exc:
         raise _exec_failed(exc) from exc
-    return {"statement_kind": result.kind, "rows_affected": affected}
+    out: dict[str, Any] = {"statement_kind": result.kind, "rows_affected": affected}
+    # das 轨受理 success ≠ 生效（survey/07）：DDL 后必须查询验证创建结果（用户规则）
+    if settings.driver == "das" and channel is ToolRisk.DANGEROUS:
+        try:
+            out["verified"] = _das_verify_database(creds, settings, query)
+        except Exception:
+            out["verified"] = None  # 验证失败不吞执行结果，如实标注 None
+    return out
+
+
+_DB_DDL_RE = re.compile(
+    r"^\s*(CREATE|DROP)\s+DATABASE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?[\"']?([A-Za-z_][\w$]*)",
+    re.IGNORECASE,
+)
+
+
+def _das_verify_database(creds: DbCredentials, settings: DataMcpSettings, query: str) -> bool | None:
+    """CREATE/DROP DATABASE 后查 pg_database 确认生效；其他 DDL 返回 None（不验证）。"""
+    m = _DB_DDL_RE.match(query)
+    if not m:
+        return None
+    action, name = m.group(1).upper(), m.group(2)
+    with _pool(settings).read_connection(creds, settings=settings) as conn:
+        with _cursor(conn) as cur:
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
+            exists = cur.fetchone() is not None
+    if action == "CREATE":
+        return exists
+    if action == "DROP":
+        return not exists
+    return None
 
 
 @guard(risk=ToolRisk.READ)
-async def execute_sql(query: str) -> dict[str, Any]:
+async def execute_sql(query: str, instance: str | None = None) -> dict[str, Any]:
     """Execute one read-only SQL statement against GaussDB (SELECT / VALUES / SHOW /
     EXPLAIN / TABLE / WITH ... SELECT).
 
@@ -134,11 +163,11 @@ async def execute_sql(query: str) -> dict[str, Any]:
         query: Exactly one SQL statement. Multi-statement text, PREPARE/EXECUTE, SET,
             COPY and other utility statements are rejected.
     """
-    return await asyncio.to_thread(_run_channel, query, ToolRisk.READ)
+    return await asyncio.to_thread(_run_channel, query, ToolRisk.READ, instance)
 
 
 @guard(risk=ToolRisk.WRITE)
-async def execute_sql_write(query: str, confirm: bool = False) -> dict[str, Any]:
+async def execute_sql_write(query: str, confirm: bool = False, instance: str | None = None) -> dict[str, Any]:
     """Execute one data-modifying statement (INSERT / UPDATE / DELETE / MERGE).
 
     Scenario: apply data changes the user explicitly asked for. Requires
@@ -150,11 +179,11 @@ async def execute_sql_write(query: str, confirm: bool = False) -> dict[str, Any]
             execute_sql_dangerous for DDL.
         confirm: Reserved for guardrail confirm rules; keep false.
     """
-    return await asyncio.to_thread(_run_channel, query, ToolRisk.WRITE)
+    return await asyncio.to_thread(_run_channel, query, ToolRisk.WRITE, instance)
 
 
 @guard(risk=ToolRisk.DANGEROUS)
-async def execute_sql_dangerous(query: str, confirm: bool = False) -> dict[str, Any]:
+async def execute_sql_dangerous(query: str, confirm: bool = False, instance: str | None = None) -> dict[str, Any]:
     """Execute one DDL statement (CREATE / ALTER / DROP / TRUNCATE / GRANT ...).
 
     Scenario: schema changes requested explicitly by the user. Requires
@@ -165,11 +194,11 @@ async def execute_sql_dangerous(query: str, confirm: bool = False) -> dict[str, 
         query: Exactly one DDL statement.
         confirm: Set true on the second call after reviewing the confirmation envelope.
     """
-    return await asyncio.to_thread(_run_channel, query, ToolRisk.DANGEROUS)
+    return await asyncio.to_thread(_run_channel, query, ToolRisk.DANGEROUS, instance)
 
 
 @guard(risk=ToolRisk.READ)
-async def explain_sql(query: str) -> dict[str, Any]:
+async def explain_sql(query: str, instance: str | None = None) -> dict[str, Any]:
     """Run EXPLAIN on a SELECT statement without executing it.
 
     Scenario: check the query plan before running an expensive query.
@@ -177,10 +206,10 @@ async def explain_sql(query: str) -> dict[str, Any]:
     Args:
         query: One SELECT / TABLE / WITH ... SELECT statement.
     """
-    return await asyncio.to_thread(_run_explain, query)
+    return await asyncio.to_thread(_run_explain, query, instance)
 
 
-def _run_explain(query: str) -> dict[str, Any]:
+def _run_explain(query: str, instance: str | None = None) -> dict[str, Any]:
     settings = _settings()
     result = classify_sql(query, max_sql_chars=settings.max_sql_chars)
     # 必须先按 risk 锁 READ 通道：WITH 首关键词的写 CTE（WITH x AS (INSERT ...) SELECT）
@@ -190,14 +219,12 @@ def _run_explain(query: str) -> dict[str, Any]:
             "GAUSSDB_DATA_MCP_RISK_MISMATCH",
             f"explain_sql only accepts SELECT-class statements, got {result.kind}.",
         )
-    creds = DbCredentials.load(settings)
+    creds = DbCredentials.load(settings, instance)
     try:
-        with (
-            _pool(settings).read_connection(creds, settings=settings) as conn,
-            cursor(conn) as cur,
-        ):
-            cur.execute(f"EXPLAIN {query}")
-            return _format_rows(cur, settings)
+        with _pool(settings).read_connection(creds, settings=settings) as conn:
+            with _cursor(conn) as cur:
+                cur.execute(f"EXPLAIN {query}")
+                return _format_rows(cur, settings)
     except McpToolError:
         raise
     except Exception as exc:

@@ -1,12 +1,9 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 """数据库驱动抽象：psycopg2（Linux/官方 whl）与 pyodbc（Windows/GaussDB ODBC）双轨。
 
 自动选择：
 - 环境变量 GAUSSDB_DATA_MCP_DRIVER=psycopg2|pyodbc 强制指定
 - 未指定时按平台自动：Windows → pyodbc，其他 → psycopg2
-统一接口（与 service/database.py 的调用约定一致）：
+统一接口（与 db.py 的调用约定一致）：
 - connect(creds, settings) -> 连接对象（autocommit=True 已设置）
 - placeholder() -> "%s" 或 "?"
 - driver_name() -> "psycopg2" | "pyodbc"
@@ -24,7 +21,7 @@ from typing import Any
 
 from huaweicloud_mcp_core.errors import McpToolError
 
-from ..config import DataMcpSettings
+from .config import DataMcpSettings
 from .credentials import DbCredentials
 
 _DRIVER_ENV = "GAUSSDB_DATA_MCP_DRIVER"
@@ -46,7 +43,7 @@ def _auth_failed() -> McpToolError:
 
 
 @contextmanager
-def cursor(conn: Any) -> Iterator[Any]:
+def _cursor(conn: Any) -> Iterator[Any]:
     """统一游标作用域：psycopg2 cursor 支持 with 而 pyodbc cursor 不支持，
     但两者都有 close()——统一手动关闭。"""
     cur = conn.cursor()
@@ -73,7 +70,7 @@ class Psycopg2Driver:
                 "GAUSSDB_DATA_MCP_DRIVER_MISSING",
                 "GaussDB psycopg2 driver is not installed.",
                 hint="Install the official GaussDB_Kernel_*_py311_linux whl "
-                "(Linux + Python 3.11 only, see docs).",
+                     "(Linux + Python 3.11 only, see docs).",
             ) from exc
         return psycopg2
 
@@ -115,7 +112,7 @@ class PyodbcDriver:
                 "GAUSSDB_DATA_MCP_DRIVER_MISSING",
                 "pyodbc is not installed.",
                 hint="uv pip install pyodbc (or: uv sync --group windows) and install "
-                "the GaussDB ODBC driver; see README section 2.5.",
+                     "the GaussDB ODBC driver; see README section 2.5.",
             ) from exc
         return pyodbc
 
@@ -129,8 +126,8 @@ class PyodbcDriver:
                 "GAUSSDB_DATA_MCP_CA_MISSING",
                 f"pyodbc track: sslmode '{creds.sslmode}' requires an explicit CA certificate.",
                 hint="Set an absolute 'sslrootcert' path in credentials.json (passed to the "
-                "ODBC driver as SSLRootCert); gsqlodbc CA validation depends on the "
-                "driver version — prefer the psycopg2 or Docker track in production.",
+                     "ODBC driver as SSLRootCert); gsqlodbc CA validation depends on the "
+                     "driver version — prefer the psycopg2 or Docker track in production.",
             )
         odbc_driver = os.environ.get(_ODBC_DRIVER_ENV, "").strip() or _DEFAULT_ODBC_DRIVER
         parts = [
@@ -170,38 +167,35 @@ class PyodbcDriver:
         # 实测必须 autocommit：事务内 SET SESSION CHARACTERISTICS 不生效
         conn.autocommit = True
         # ODBC 无 options 启动参数：statement_timeout 连接后 SET（会话级，实测生效）
-        with cursor(conn) as cur:
+        with _cursor(conn) as cur:
             cur.execute(f"SET statement_timeout = {settings.statement_timeout_ms}")
         return conn
 
 
 def _is_auth_failure(pyodbc: Any, exc: Exception) -> bool:
-    # 认证失败判定（大小写不敏感）：psycopg2 轨的 pgcode 28P01 对应 ODBC 侧的
-    # "password authentication failed"；云上 pyodbc 轨实测（2026-10 E2E 回归）
-    # gsqlodbc 错密码报 "Invalid username/password,login denied."；部分版本以
-    # 登录超时类错误呈现（设计口径 pyodbc.LoginTimeoutError——5.x 实无此属性，
-    # 防御式探测，驱动定义了才按类型判定，避免 AttributeError）。
+    # 认证失败判定：错误文本含 "password authentication failed"（psycopg2 轨
+    # 的 pgcode 28P01 对应 ODBC 侧的该文本）；部分版本以登录超时类错误呈现
+    # （设计口径 pyodbc.LoginTimeoutError——5.x 实无此属性，防御式探测，
+    # 驱动定义了才按类型判定，避免 AttributeError）。
     login_timeout = getattr(pyodbc, "LoginTimeoutError", None)
     if login_timeout is not None and isinstance(exc, login_timeout):
         return True
-    text = str(exc).lower()
-    return (
-        "password authentication failed" in text
-        or "login denied" in text
-        or "invalid username" in text
-    )
+    return "password authentication failed" in str(exc).lower()
 
 
-def get_driver() -> Psycopg2Driver | PyodbcDriver:
-    """驱动工厂：env 强制指定，否则按平台（Windows → pyodbc，其余 → psycopg2）。"""
+def get_driver() -> Psycopg2Driver | PyodbcDriver | Any:
+    """驱动工厂：env 强制指定，否则按平台（Windows → pyodbc，其余 → psycopg2）。das 轰 DAS 轨。"""
     name = os.environ.get(_DRIVER_ENV, "").strip().lower()
     if not name:
         name = "pyodbc" if sys.platform == "win32" else "psycopg2"
+    if name == "das":
+        from .das import DasDriver
+        return DasDriver()
     if name == "psycopg2":
         return Psycopg2Driver()
     if name == "pyodbc":
         return PyodbcDriver()
     raise McpToolError(
         "GAUSSDB_DATA_MCP_DRIVER_INVALID",
-        f"{_DRIVER_ENV} must be 'psycopg2' or 'pyodbc' (got {name!r}).",
+        f"{_DRIVER_ENV} must be 'psycopg2', 'pyodbc' or 'das' (got {name!r}).",
     )

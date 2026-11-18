@@ -1,6 +1,3 @@
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
-# SPDX-License-Identifier: MIT
-
 """sql_guard 对抗测试套件。所有用例不依赖数据库。"""
 
 from importlib.metadata import version
@@ -9,7 +6,7 @@ import pytest
 from huaweicloud_mcp_core import ToolRisk
 from huaweicloud_mcp_core.errors import McpToolError
 
-from mcp_server_gaussdb_data.service.sql_guard import classify_sql
+from mcp_server_gaussdb_data.sql_guard import classify_sql
 
 
 def test_sqlparse_version_pinned():
@@ -25,43 +22,37 @@ def read(sql: str, **kwargs):
 
 
 # ---------- 合法 READ ----------
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "SELECT * FROM t",
-        "select 1",
-        "WITH c AS (SELECT 1) SELECT * FROM c",
-        "SHOW max_connections",
-        "EXPLAIN SELECT * FROM t",
-        "EXPLAIN ANALYZE SELECT * FROM t",
-        "VALUES (1), (2)",
-        "SELECT 'DROP TABLE x'",  # 字符串字面量不误报
-        "SELECT update_time FROM t",  # 标识符不误报
-        "-- drop everything\nSELECT 1",  # 注释不误报
-        "/* UPDATE all rows */ SELECT 1",
-        "SELECT 1;",  # 尾分号 = 单语句
-    ],
-)
+@pytest.mark.parametrize("sql", [
+    "SELECT * FROM t",
+    "select 1",
+    "WITH c AS (SELECT 1) SELECT * FROM c",
+    "SHOW max_connections",
+    "EXPLAIN SELECT * FROM t",
+    "EXPLAIN ANALYZE SELECT * FROM t",
+    "VALUES (1), (2)",
+    "SELECT 'DROP TABLE x'",            # 字符串字面量不误报
+    "SELECT update_time FROM t",        # 标识符不误报
+    "-- drop everything\nSELECT 1",     # 注释不误报
+    "/* UPDATE all rows */ SELECT 1",
+    "SELECT 1;",                        # 尾分号 = 单语句
+])
 def test_read_ok(sql):
     assert read(sql).risk is ToolRisk.READ
 
 
 # ---------- 合法 WRITE / DANGEROUS ----------
-@pytest.mark.parametrize(
-    "sql,kind",
-    [
-        ("INSERT INTO t VALUES (1)", "INSERT"),
-        ("UPDATE t SET a = 1", "UPDATE"),
-        (
-            "INSERT INTO t VALUES (1) ON CONFLICT DO UPDATE SET a = 2",
-            "INSERT",
-        ),  # 子句里的 SET/UPDATE 不拦
-        ("WITH c AS (SELECT 1) INSERT INTO t SELECT * FROM c", "WITH"),
-        ("CREATE TABLE t (id int)", "CREATE"),
-        ("DROP TABLE t", "DROP"),
-        ("TRUNCATE TABLE t", "TRUNCATE"),
-    ],
-)
+@pytest.mark.parametrize("sql,kind", [
+    ("INSERT INTO t VALUES (1)", "INSERT"),
+    ("UPDATE t SET a = 1", "UPDATE"),
+    (
+        "INSERT INTO t VALUES (1) ON CONFLICT DO UPDATE SET a = 2",
+        "INSERT",
+    ),  # 子句里的 SET/UPDATE 不拦
+    ("WITH c AS (SELECT 1) INSERT INTO t SELECT * FROM c", "WITH"),
+    ("CREATE TABLE t (id int)", "CREATE"),
+    ("DROP TABLE t", "DROP"),
+    ("TRUNCATE TABLE t", "TRUNCATE"),
+])
 def test_write_ddl_ok(sql, kind):
     assert read(sql).kind == kind
 
@@ -71,21 +62,18 @@ def test_with_write_classified_as_write():
 
 
 # ---------- 首关键词拒绝（含 polardb 实测绕过面） ----------
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "SET GLOBAL max_connections = 1000",
-        "PREPARE s FROM 'DROP TABLE t'",  # polardb 实测绕过点——这里首关键词即拦
-        "EXECUTE s",
-        "COPY t FROM STDIN",
-        "DO $$ BEGIN DELETE FROM t; END $$",
-        "CALL p()",
-        "LOCK TABLE t",
-        "BEGIN",
-        "COMMIT",
-        "VACUUM t",
-    ],
-)
+@pytest.mark.parametrize("sql", [
+    "SET GLOBAL max_connections = 1000",
+    "PREPARE s FROM 'DROP TABLE t'",     # polardb 实测绕过点——这里首关键词即拦
+    "EXECUTE s",
+    "COPY t FROM STDIN",
+    "DO $$ BEGIN DELETE FROM t; END $$",
+    "CALL p()",
+    "LOCK TABLE t",
+    "BEGIN",
+    "COMMIT",
+    "VACUUM t",
+])
 def test_first_keyword_rejected(sql):
     with pytest.raises(McpToolError):
         read(sql)
@@ -94,12 +82,9 @@ def test_first_keyword_rejected(sql):
 # ---------- 全 token 扫描拒绝（READ 通道内藏写/DDL） ----------
 # 注：规则表规定 READ 通道命中扫描关键字即拒绝（不是降级），
 # 与 test_read_scan_finds_delete_in_cte 一致，故此处断言抛 McpToolError。
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "SELECT * INTO new_t FROM t",  # SELECT INTO 建表——polardb 未拦，我们必须拦
-    ],
-)
+@pytest.mark.parametrize("sql", [
+    "SELECT * INTO new_t FROM t",        # SELECT INTO 建表——polardb 未拦，我们必须拦
+])
 def test_read_channel_scan(sql):
     with pytest.raises(McpToolError):
         read(sql)
@@ -112,17 +97,14 @@ def test_read_scan_finds_delete_in_cte():
 
 
 # ---------- 多语句 / 内容拒绝 ----------
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "SELECT 1; SELECT 2",
-        "SELECT 1; DELETE FROM t",
-        "SELECT 1\0",
-        "",
-        "   ",
-        ";",
-    ],
-)
+@pytest.mark.parametrize("sql", [
+    "SELECT 1; SELECT 2",
+    "SELECT 1; DELETE FROM t",
+    "SELECT 1\0",
+    "",
+    "   ",
+    ";",
+])
 def test_invalid_input_rejected(sql):
     with pytest.raises(McpToolError):
         read(sql)
@@ -140,15 +122,12 @@ def test_trailing_garbage_rejected():
 
 
 # ---------- 危险函数与敏感会话变量（AWS mysql-mcp 借鉴） ----------
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "SELECT pg_sleep(100)",  # 读形态调用危险函数
-        "SELECT pg_read_file('/etc/passwd')",
-        "SELECT * FROM dblink('dbname=x', 'SELECT 1') AS t(c int)",
-        "INSERT INTO t VALUES (pg_sleep(1))",  # 写通道同样拦
-    ],
-)
+@pytest.mark.parametrize("sql", [
+    "SELECT pg_sleep(100)",                       # 读形态调用危险函数
+    "SELECT pg_read_file('/etc/passwd')",
+    "SELECT * FROM dblink('dbname=x', 'SELECT 1') AS t(c int)",
+    "INSERT INTO t VALUES (pg_sleep(1))",         # 写通道同样拦
+])
 def test_dangerous_function_rejected(sql):
     with pytest.raises(McpToolError):
         read(sql)
@@ -159,13 +138,10 @@ def test_dangerous_function_column_name_not_flagged():
     assert read("SELECT pg_sleep FROM t").risk is ToolRisk.READ
 
 
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "ALTER DATABASE db SET synchronous_commit = off",  # DDL 通道也拒（关完整性）
-        "ALTER ROLE r SET row_security = off",
-    ],
-)
+@pytest.mark.parametrize("sql", [
+    "ALTER DATABASE db SET synchronous_commit = off",   # DDL 通道也拒（关完整性）
+    "ALTER ROLE r SET row_security = off",
+])
 def test_sensitive_session_var_rejected_all_channels(sql):
     with pytest.raises(McpToolError):
         read(sql)
@@ -188,14 +164,11 @@ def test_adversarial_comment_between_statements():
         read("SELECT 1 /* tail */; SELECT 2")
 
 
-@pytest.mark.parametrize(
-    "sql,risk,kind",
-    [
-        ("sElEcT * fRoM t", ToolRisk.READ, "SELECT"),  # 大小写归一：小写放行
-        ("drop table t", ToolRisk.DANGEROUS, "DROP"),  # 小写 DDL 仍归 DANGEROUS
-        ("With c As (Insert Into t Select 1) Select * From c", ToolRisk.WRITE, "WITH"),
-    ],
-)
+@pytest.mark.parametrize("sql,risk,kind", [
+    ("sElEcT * fRoM t", ToolRisk.READ, "SELECT"),        # 大小写归一：小写放行
+    ("drop table t", ToolRisk.DANGEROUS, "DROP"),        # 小写 DDL 仍归 DANGEROUS
+    ("With c As (Insert Into t Select 1) Select * From c", ToolRisk.WRITE, "WITH"),
+])
 def test_adversarial_case_folding(sql, risk, kind):
     result = read(sql)
     assert (result.risk, result.kind) == (risk, kind)
@@ -247,14 +220,11 @@ def test_adversarial_for_update_conservatively_rejected():
         read("SELECT * FROM t FOR UPDATE")
 
 
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "prepare s as select 1",  # 小写首关键词同样拦
-        "execute s",
-        "PREPARE s AS DELETE FROM t",  # polardb 绕过面的变体
-    ],
-)
+@pytest.mark.parametrize("sql", [
+    "prepare s as select 1",          # 小写首关键词同样拦
+    "execute s",
+    "PREPARE s AS DELETE FROM t",     # polardb 绕过面的变体
+])
 def test_adversarial_prepare_execute_variants(sql):
     with pytest.raises(McpToolError):
         read(sql)
@@ -272,24 +242,21 @@ def test_adversarial_with_hides_dangerous_function():
         read("WITH c AS (SELECT pg_sleep(1)) SELECT * FROM c")
 
 
-@pytest.mark.parametrize(
-    "sql,risk,kind",
-    [
-        ("TABLE t", ToolRisk.READ, "TABLE"),  # READ 白名单第 5 词
-        ("DELETE FROM t WHERE id = 1", ToolRisk.WRITE, "DELETE"),
-        (
-            "MERGE INTO t USING s ON (t.id = s.id) WHEN MATCHED THEN UPDATE SET t.a = s.a",
-            ToolRisk.WRITE,
-            "MERGE",
-        ),
-        ("REPLACE INTO t VALUES (1)", ToolRisk.WRITE, "REPLACE"),
-        ("ALTER TABLE t ADD COLUMN c int", ToolRisk.DANGEROUS, "ALTER"),
-        ("RENAME TABLE a TO b", ToolRisk.DANGEROUS, "RENAME"),
-        ("COMMENT ON TABLE t IS 'x'", ToolRisk.DANGEROUS, "COMMENT"),
-        ("GRANT SELECT ON t TO u", ToolRisk.DANGEROUS, "GRANT"),
-        ("REVOKE SELECT ON t FROM u", ToolRisk.DANGEROUS, "REVOKE"),
-    ],
-)
+@pytest.mark.parametrize("sql,risk,kind", [
+    ("TABLE t", ToolRisk.READ, "TABLE"),                                  # READ 白名单第 5 词
+    ("DELETE FROM t WHERE id = 1", ToolRisk.WRITE, "DELETE"),
+    (
+        "MERGE INTO t USING s ON (t.id = s.id) WHEN MATCHED THEN UPDATE SET t.a = s.a",
+        ToolRisk.WRITE,
+        "MERGE",
+    ),
+    ("REPLACE INTO t VALUES (1)", ToolRisk.WRITE, "REPLACE"),
+    ("ALTER TABLE t ADD COLUMN c int", ToolRisk.DANGEROUS, "ALTER"),
+    ("RENAME TABLE a TO b", ToolRisk.DANGEROUS, "RENAME"),
+    ("COMMENT ON TABLE t IS 'x'", ToolRisk.DANGEROUS, "COMMENT"),
+    ("GRANT SELECT ON t TO u", ToolRisk.DANGEROUS, "GRANT"),
+    ("REVOKE SELECT ON t FROM u", ToolRisk.DANGEROUS, "REVOKE"),
+])
 def test_adversarial_whitelist_matrix(sql, risk, kind):
     # 白名单全集逐词覆盖：每个首关键词都走对通道（含 GRANT/REVOKE 子句里的 SELECT 不影响 DDL 通道）
     result = read(sql)
@@ -300,7 +267,10 @@ def test_adversarial_whitelist_matrix(sql, risk, kind):
 def test_acompat_hierarchical_query_read():
     # A 兼容层次查询：START WITH 是 SELECT 的合法子句（与 CONNECT BY 配套），
     # 不得因 START 命中 UTILITY 扫描而误拒；START 语句形态由首关键词门拦截
-    assert read("SELECT a FROM t START WITH a = 1 CONNECT BY PRIOR a = a").risk is ToolRisk.READ
+    assert (
+        read("SELECT a FROM t START WITH a = 1 CONNECT BY PRIOR a = a").risk
+        is ToolRisk.READ
+    )
 
 
 def test_start_transaction_still_rejected_not_whitelisted():
@@ -327,7 +297,7 @@ def test_quoted_identifier_function_call_rejected():
 def test_quoted_identifier_set_config_rejected():
     # 同路径同时穿透函数层与变量层（变量名在单引号字符串里是数据，由函数层拦截）
     with pytest.raises(McpToolError):
-        read("SELECT \"set_config\"('session_replication_role','replica',false)")
+        read('SELECT "set_config"(\'session_replication_role\',\'replica\',false)')
 
 
 def test_quoted_identifier_sensitive_var_rejected():
@@ -393,29 +363,23 @@ def test_backtick_column_without_call_not_flagged():
 # ---------- Oracle 语法深化轮（2026-10-12）：集合运算符 / 序列 / Oracle 读形态 ----------
 # 矩阵实测依据：本地集中式 A 库真库（词法 + 只读会话行为），
 # live 锁定见 tests/integration/test_live_acompat.py（TestOracle* 系列）。
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "SELECT * FROM t1 MINUS SELECT * FROM t2",  # Oracle 集合运算符（PG 叫 EXCEPT）
-        "SELECT * FROM t1 EXCEPT SELECT * FROM t2",
-        "SELECT * FROM t1 INTERSECT SELECT * FROM t2",
-        "SELECT DECODE(a, 1, 'x', 'y') FROM t",
-        "SELECT TO_CHAR(sysdate, 'YYYY-MM-DD') FROM DUAL",
-        "SELECT /*+ FULL(t) */ * FROM t",  # Oracle 优化器提示在注释里
-    ],
-)
+@pytest.mark.parametrize("sql", [
+    "SELECT * FROM t1 MINUS SELECT * FROM t2",          # Oracle 集合运算符（PG 叫 EXCEPT）
+    "SELECT * FROM t1 EXCEPT SELECT * FROM t2",
+    "SELECT * FROM t1 INTERSECT SELECT * FROM t2",
+    "SELECT DECODE(a, 1, 'x', 'y') FROM t",
+    "SELECT TO_CHAR(sysdate, 'YYYY-MM-DD') FROM DUAL",
+    "SELECT /*+ FULL(t) */ * FROM t",                    # Oracle 优化器提示在注释里
+])
 def test_oracle_read_forms_ok(sql):
     assert read(sql).risk is ToolRisk.READ
 
 
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "SELECT seq_test.NEXTVAL FROM DUAL",  # Oracle 属性形态（内核改写为 nextval()）
-        "SELECT nextval('s')",
-        "SELECT setval('s', 1)",
-    ],
-)
+@pytest.mark.parametrize("sql", [
+    "SELECT seq_test.NEXTVAL FROM DUAL",   # Oracle 属性形态（内核改写为 nextval()）
+    "SELECT nextval('s')",
+    "SELECT setval('s', 1)",
+])
 def test_sequence_advancement_lexically_read(sql):
     # 序列推进词法层放行为 READ（真状态变更）。真库实测（507 集中式 A 库）：第二层
     # 只读会话由内核兜底——ReadOnlySqlTransaction "cannot execute nextval()/setval()
@@ -428,13 +392,10 @@ def test_sequence_currval_lexically_read():
     assert read("SELECT seq_test.CURRVAL FROM DUAL").risk is ToolRisk.READ
 
 
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "INSERT INTO t (id) VALUES (seq_test.NEXTVAL)",  # Oracle 主线 DML 模式
-        "INSERT INTO t VALUES (nextval('s'))",
-    ],
-)
+@pytest.mark.parametrize("sql", [
+    "INSERT INTO t (id) VALUES (seq_test.NEXTVAL)",   # Oracle 主线 DML 模式
+    "INSERT INTO t VALUES (nextval('s'))",
+])
 def test_sequence_in_dml_stays_write(sql):
     # nextval/setval 刻意不进 _DANGEROUS_FUNCTIONS 的原因：写通道的
     # INSERT ... VALUES (seq.NEXTVAL) 是合法写语句（READ_ONLY=false 环境的正道用法），
@@ -442,14 +403,11 @@ def test_sequence_in_dml_stays_write(sql):
     assert read(sql).risk is ToolRisk.WRITE
 
 
-@pytest.mark.parametrize(
-    "sql,kind",
-    [
-        ("CREATE SEQUENCE seq_test START WITH 1", "CREATE"),  # START WITH 子句不误拒
-        ("DROP SEQUENCE seq_test", "DROP"),
-        ("ALTER SEQUENCE seq_test RESTART WITH 5", "ALTER"),
-    ],
-)
+@pytest.mark.parametrize("sql,kind", [
+    ("CREATE SEQUENCE seq_test START WITH 1", "CREATE"),   # START WITH 子句不误拒
+    ("DROP SEQUENCE seq_test", "DROP"),
+    ("ALTER SEQUENCE seq_test RESTART WITH 5", "ALTER"),
+])
 def test_sequence_ddl_dangerous(sql, kind):
     # 序列 DDL 与表 DDL 一致：走 DANGEROUS 通道（confirm 门 + ENABLE_DDL 开关）
     result = read(sql)
@@ -457,16 +415,13 @@ def test_sequence_ddl_dangerous(sql, kind):
 
 
 # ---------- 终审修复 2：咨询锁函数进危险名单 ----------
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "SELECT pg_advisory_lock(1)",  # 会话级：持有到会话结束（池化危害链）
-        "SELECT pg_try_advisory_lock(1)",
-        "SELECT pg_advisory_xact_lock(1)",
-        "SELECT pg_try_advisory_xact_lock(1)",
-        "INSERT INTO t VALUES (pg_advisory_lock(1))",  # 写通道同样拦
-    ],
-)
+@pytest.mark.parametrize("sql", [
+    "SELECT pg_advisory_lock(1)",              # 会话级：持有到会话结束（池化危害链）
+    "SELECT pg_try_advisory_lock(1)",
+    "SELECT pg_advisory_xact_lock(1)",
+    "SELECT pg_try_advisory_xact_lock(1)",
+    "INSERT INTO t VALUES (pg_advisory_lock(1))",  # 写通道同样拦
+])
 def test_advisory_lock_functions_rejected(sql):
     # 错误文案早已承诺 "advisory locks"，此处兑现名单
     with pytest.raises(McpToolError) as exc:

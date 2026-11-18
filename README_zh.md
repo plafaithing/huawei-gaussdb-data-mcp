@@ -2,312 +2,127 @@
 
 > **语言切换：** [English](./README.md) | 中文
 
-## 版本
+GaussDB **数据面 MCP 服务**：AI 客户端（Dify、Claude Code 等）通过它在三层安全防护下查询与操作 GaussDB 业务数据。连接走 **DAS 传输轨**——SQL 经数据管理服务（DAS）的管控面 HTTPS 接口执行，**数据库端口零公网可达**，MCP 可部署在任意能访问华为云管控面的位置（本地 / 云上均可，无需 VPC、专线或 EIP）。
 
-0.1.0
+**Oracle 兼容（A/ORA）库是第一优先场景**：MERGE INTO、DUAL、MINUS、DECODE、NVL、varchar2 等 Oracle 系语法已在真实 A 兼容库上实测通过（DAS 轨与 DB 协议轨双验证）。
 
-## 概述
+## 1. 安全模型
 
-华为云 GaussDB 数据面 MCP Server：AI 客户端经标准 MCP 协议在三层安全防护下查询与
-操作 GaussDB 数据，支持双传输与结构化审计。本服务连接的是数据库实例本身（数据库
-协议 + 数据库账号），凭证只保存在服务端、不经过 LLM；与管控面 GaussDB MCP
-（OpenAPI/AK-SK 管实例生命周期）互补——那边管云资源，这边管库内数据。
+| 层 | 机制 |
+|---|---|
+| 第一层 | 服务端 SQL 白名单分类 + 通道锁（READ/WRITE/DANGEROUS 三工具，语句与通道不符即拒） |
+| 第二层 | 最小权限账号（业务操作用 `mcp_ro` 类只读/受限账号，管理员账号仅用于初始化） |
+| 第三层 | 凭证域分离：数据库密码只存服务端且**不进入执行链路**（das 轨注册时一次性交给 DAS 托管），凭证/SQL 全程不经 LLM；每次调用一行 JSONL 审计 |
 
-## 分类
+DAS 轨下 MCP 只持 AK/SK（管控面签名）+ 连接 id——数据库密码、连接串均不落在执行路径。
 
-数据库
-
-## 功能
-
-- 7 个工具：SQL 执行（读 / 写 / DDL）、EXPLAIN、schema/表/字段浏览
-- 三档风险通道（READ / WRITE / DANGEROUS），DANGEROUS 通道走确认信封，且默认关闭、
-  需 `GAUSSDB_DATA_MCP_ENABLE_DDL=true` 显式开启
-- 服务端 SQL 白名单分类 + 通道锁：语句由服务端分类（不依赖 LLM 选对通道），必须走
-  与风险匹配的工具（否则 `GAUSSDB_DATA_MCP_RISK_MISMATCH`）；多语句、UTILITY 语句、
-  危险函数、敏感会话变量一律默认拒绝
-- 代码级只读默认（`GAUSSDB_DATA_MCP_READ_ONLY=true`）；读连接建立即固定只读事务，
-  归还池前 `RESET ALL`
-- 读连接池（指纹校验、空闲 TTL）；写/DDL 连接用完即关
-- 双驱动：GaussDB 官方 psycopg2 驱动（Linux/py3.11，连云上实例必须）+ pyodbc
-  （Windows，经 GaussDB ODBC 驱动）
-- streamable-http 内置 Bearer token 鉴权（常数时间比较、401/503 语义、token 文件热读）
-- 每次工具调用一行 JSONL 审计（工具、风险、决策、规则命中、客户端身份、脱敏入参）
-- 热轮换：credentials.json 与 tokens.json 每次调用重读，原子替换即生效，无需重启
-- Oracle 兼容（A/ORA）库为第一优先场景：MERGE INTO upsert、DUAL、层次查询、MINUS、
-  序列、DECODE 等已在真实集中式与分布式实例上验证
-
-## 工具清单
-
-数据面不暴露云 API，所有工具执行的都是 SQL，故每行链接覆盖该工具语句族的
-GaussDB SQL 语法参考。
-
-| 工具 | 场景 | 风险级别 | 文档 |
-|---|---|---|---|
-| `execute_sql` | 单条只读语句：SELECT / VALUES / SHOW / EXPLAIN / TABLE / WITH…SELECT——数据查询与探索 | READ | [GaussDB SQL 语法参考](https://support.huaweicloud.com/intl/zh-cn/sqlreference-gaussdb/gaussdb_01_0001.html) |
-| `execute_sql_write` | 单条 DML：INSERT / UPDATE / DELETE / MERGE / REPLACE（autocommit；需 `READ_ONLY=false`） | WRITE | [GaussDB SQL 语法参考](https://support.huaweicloud.com/intl/zh-cn/sqlreference-gaussdb/gaussdb_01_0001.html) |
-| `execute_sql_dangerous` | 单条 DDL：CREATE / ALTER / DROP / TRUNCATE / RENAME / COMMENT / GRANT / REVOKE（确认信封 + `ENABLE_DDL=true`） | DANGEROUS | [GaussDB SQL 语法参考](https://support.huaweicloud.com/intl/zh-cn/sqlreference-gaussdb/gaussdb_01_0001.html) |
-| `explain_sql` | 对 SELECT 类语句跑 EXPLAIN 不执行——大查询前先看计划 | READ | [GaussDB SQL 语法参考](https://support.huaweicloud.com/intl/zh-cn/sqlreference-gaussdb/gaussdb_01_0001.html) |
-| `list_schemas` | 列出 MCP 账号可见的 schema | READ | [GaussDB SQL 语法参考](https://support.huaweicloud.com/intl/zh-cn/sqlreference-gaussdb/gaussdb_01_0001.html) |
-| `list_tables` | 列出 schema 内表与视图（参数化查询） | READ | [GaussDB SQL 语法参考](https://support.huaweicloud.com/intl/zh-cn/sqlreference-gaussdb/gaussdb_01_0001.html) |
-| `describe_table` | 表字段详情：列名/类型/可空/默认值（参数化查询） | READ | [GaussDB SQL 语法参考](https://support.huaweicloud.com/intl/zh-cn/sqlreference-gaussdb/gaussdb_01_0001.html) |
-
-所有工具每次调用恰好执行一条语句。
-
-## 使用指引
-
-### 前置条件
-
-- Python 3.10+ 与 [uv](https://docs.astral.sh/uv/)：
-
-**Linux/macOS：**
+## 2. 安装
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-**Windows：**
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-- **数据库驱动。** 云上 GaussDB 实例默认 sha256 认证，开源 psycopg2 不支持——须用
-  官方自研驱动：
-
-  - **Linux（生产）：** 官方 psycopg2 驱动不发布 PyPI，只随数据库驱动发布包分发
-    （仅 Linux x86_64/ARM64 + Python 3.11）。用 `./fetch-driver.sh
-    /path/to/DBS-GaussDB-driver_*.tar.gz` 提取 whl，然后 `pip uninstall psycopg2
-    psycopg2-binary` 再安装提取出的 whl。系统依赖：`libkeyutils1 libsasl2-2
-    libldap-common`；非数据库用户运行时需设 `LD_LIBRARY_PATH` 指向
-    `<site-packages>/gaussdb_psycopg2.lib`。
-  - **Windows（原生）：** 安装 GaussDB ODBC 驱动（官方驱动包内 `gsqlodbc` 安装器，
-    注册名为 `GaussDB Unicode`）与 `pyodbc`（`uv sync --group windows`）。必须使用
-    python.org 官方安装包的 Python（3.11+）：uv 托管等第三方构建的 Python 其
-    `_ssl.pyd` 依赖 `libcrypto-3-x64.dll`，与 GaussDB ODBC 驱动的同名 DLL 冲突
-    （症状 `IM003 (160)`）；官方构建命名为 `libcrypto-3.dll`，无冲突。
-
-- **数据库账号（第三层防护）。** 绝不使用初始管理员账号——创建专用最小权限角色。
-  只读基线（默认部署形态）：
-
-  ```sql
-  CREATE ROLE mcp_ro WITH LOGIN PASSWORD '********';
-  GRANT USAGE ON SCHEMA mybiz TO mcp_ro;
-  GRANT SELECT ON ALL TABLES IN SCHEMA mybiz TO mcp_ro;        -- 现有表
-  ALTER DEFAULT PRIVILEGES IN SCHEMA mybiz
-    GRANT SELECT ON TABLES TO mcp_ro;                          -- 未来新建表
-  ```
-
-  放开写入时用单独角色，只授业务 schema 的 SELECT/INSERT/UPDATE/DELETE——不授
-  CREATE/ALTER/DROP/TRUNCATE/GRANT，即使 DDL 开关误开，账号层仍拦得住。GaussDB
-  密码连错 10 次锁号 1 天；本服务对认证失败刻意不重试。
-
-### 安装
-
-```bash
-git clone https://github.com/huaweicloud/huaweicloud-mcp.git
-cd huaweicloud-mcp/server/mcp_server_gaussdb_data
 uv sync
-uv run mcp_server_gaussdb_data                     # stdio（默认）
-uv run mcp_server_gaussdb_data -t streamable-http  # 远程传输
+uv run gaussdb-data-mcp            # stdio（默认）
+uv run gaussdb-data-mcp -t streamable-http
 ```
 
-Linux 上先按「前置条件」装好官方驱动 whl（`./fetch-driver.sh` 可从官方驱动包提取）。
+## 3. 配置
 
-### Docker 部署（monorepo 构建）
+### 3.1 credentials.json（0600，热轮换）
 
-构建上下文为**仓库根**（core 由 `libs/huaweicloud_mcp_core` 源码直接安装，不依赖 PyPI 发布物）。
-官方驱动 whl 先经 `fetch-driver.sh` 落到 `server/mcp_server_gaussdb_data/wheels/`（不入库）：
-
-```bash
-cd huaweicloud-mcp
-./server/mcp_server_gaussdb_data/fetch-driver.sh /path/to/DBS-GaussDB-driver_*.tar.gz
-docker build -t mcp_server_gaussdb_data \
-  -f server/mcp_server_gaussdb_data/deploy/Dockerfile .
+```json
+{
+  "ak": "...", "sk": "...", "region": "北京四",
+  "default_instance": "<instance_id>",
+  "instances": {
+    "<instance_id>": {
+      "das_connection_id": "<DAS 连接 id>",
+      "dbname": "mydb",
+      "schema": "dbe_alert",
+      "user": "mcp_ro",
+      "password": "..."
+    }
+  }
+}
 ```
 
-**多架构构建**：Dockerfile 按 RUN 内 `uname -m`（buildx 下即目标平台架构）挑选并校验
-`wheels/` 中的驱动 whl（两架构 whl 可并存）：
+| 字段 | 说明 |
+|---|---|
+| ak/sk | 华为云 AK/SK（管控面签名；DAS 接口与 IAM 自动查 project_id 均使用） |
+| region | 支持中文区域名（"北京四"→cn-north-4 自动映射） |
+| das_connection_id | DAS 连接 id。来源：DAS 控制台登录实例产生，或 `register_das_connection` 工具注册产生；**缺失时 das 轨自动注册**（需条目内有 user/password） |
+| dbname | 执行 SQL 的库。**已配置用户库则直接使用**；落在系统库（postgres 等）时首次调用 `list_user_databases` 获取选择/建库引导 |
+| schema | 默认 `dbe_alert`（跨库 DDL 仅在此 schema 下生效，实测约束） |
+| user/password | 连接未激活时自动 `retry_login`（带密码——实测唯一可靠激活方式）；建议保留以启用全自动自愈 |
 
-```bash
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t <registry>/mcp_server_gaussdb_data \
-  -f server/mcp_server_gaussdb_data/deploy/Dockerfile --push .
-```
+`project_id` 免配置（IAM `/v3/projects` 自动查询并缓存）。多实例：`instances` 下多个条目，`default_instance` 指定默认；所有执行工具有可选 `instance` 参数。
 
-> **HCE 2.0 构建注意（实测）**：HCE 宿主上 `docker build` 的 RUN 步骤内 umask 为
-> 0027（安全基线），pip 产物权限 640/750 会导致镜像内非 root 用户 `import` 失败。
-> Dockerfile 已在 pip install 前显式 `umask 022`，其它发行版不受影响。
+### 3.2 环境变量
 
-运行参数（`GAUSSDB_DATA_MCP_CREDENTIALS_FILE`/`_TOKENS_FILE`/`_AUDIT_FILE`、
-`MCP_SERVER_HOST` 等）见「配置」节；nginx 443 TLS 反代模板见 `deploy/nginx.conf.example`。
-
-## 配置
-
-### 环境变量
-
-数据库凭证可来自 credentials.json 文件（`GAUSSDB_DATA_MCP_CREDENTIALS_FILE`，0600、
-热重读）或直接来自 `GAUSSDB_DATA_MCP_DB_*` 环境变量；两者同设时文件优先。
-
-| 变量 | 必填 | 说明 | 默认值 |
-|---|---|---|---|
-| `GAUSSDB_DATA_MCP_READ_ONLY` | 否 | `true` 拦截一切 WRITE/DANGEROUS 工具（中间件启动快照——改动需重启） | `true` |
-| `GAUSSDB_DATA_MCP_ENABLE_DDL` | 否 | 打开 DANGEROUS（DDL）通道；还需 `READ_ONLY=false`。热读 | `false` |
-| `GAUSSDB_DATA_MCP_CREDENTIALS_FILE` | 否 | credentials.json 路径（0600；每次调用热重读） | 空 |
-| `GAUSSDB_DATA_MCP_TOKENS_FILE` | 否 | HTTP Bearer token 文件；非回环监听时必配 | 空 |
-| `GAUSSDB_DATA_MCP_GUARDRAILS_CONFIG` | 否 | guardrails 规则 YAML（block/confirm/warn） | 空 |
-| `GAUSSDB_DATA_MCP_AUDIT_FILE` | 否 | 审计 JSONL 文件（审计始终同时写 stderr） | 空 |
-| `GAUSSDB_DATA_MCP_PROTECTED_IDS` | 否 | 护栏受保护资源 ID（CSV） | 空 |
-| `GAUSSDB_DATA_MCP_PROTECTED_NAMES` | 否 | 护栏受保护资源名（CSV） | 空 |
-| `GAUSSDB_DATA_MCP_PROTECTED_TAGS` | 否 | 护栏受保护资源标签（CSV） | 空 |
-| `MCP_SERVER_HOST` | 否 | streamable-http 监听地址；非回环须配 `TOKENS_FILE` | `127.0.0.1` |
-| `MCP_SERVER_PORT` | 否 | streamable-http 端口（1..65535） | `8000` |
-| `GAUSSDB_DATA_MCP_MAX_ROWS` | 否 | 单次查询返回行数上限，超出截断并标记 | `200` |
-| `GAUSSDB_DATA_MCP_MAX_CELL_CHARS` | 否 | 单元格字符截断上限 | `256` |
-| `GAUSSDB_DATA_MCP_MAX_SQL_CHARS` | 否 | 单条 SQL 长度上限 | `65536` |
-| `GAUSSDB_DATA_MCP_STATEMENT_TIMEOUT_MS` | 否 | 服务端 statement_timeout（GaussDB 默认 0 = 不超时） | `30000` |
-| `GAUSSDB_DATA_MCP_POOL_MIN` | 否 | 读连接池最小连接数 | `1` |
-| `GAUSSDB_DATA_MCP_POOL_MAX` | 否 | 读连接池最大连接数 | `8` |
-| `GAUSSDB_DATA_MCP_APPLICATION_NAME` | 否 | 连接 application_name（便于在 `pg_stat_activity` 识别 MCP 流量） | `gaussdb_data_mcp` |
-| `GAUSSDB_DATA_MCP_DRIVER` | 否 | 强制驱动后端：`psycopg2` / `pyodbc`（自动：Windows → pyodbc，其余 → psycopg2） | 自动 |
-| `GAUSSDB_DATA_MCP_ODBC_DRIVER` | 否 | pyodbc 轨的 ODBC 驱动注册名 | `GaussDB Unicode` |
-| `GAUSSDB_DATA_MCP_DB_HOST` | 否 | 无凭证文件时的环境变量兜底；host/port 刻意无默认值——GaussDB CN 端口通常为 **8000**，驱动默认 5432 是错的 | 空 |
-| `GAUSSDB_DATA_MCP_DB_PORT` | 否 | 数据库端口 | `0`（必须显式给值） |
-| `GAUSSDB_DATA_MCP_DB_DBNAME` | 否 | 数据库名 | 空 |
-| `GAUSSDB_DATA_MCP_DB_USER` | 否 | 数据库用户 | 空 |
-| `GAUSSDB_DATA_MCP_DB_PASSWORD` | 否 | 数据库密码 | 空 |
-| `GAUSSDB_DATA_MCP_DB_SSLMODE` | 否 | `disable` / `allow` / `prefer` / `require` / `verify-ca` / `verify-full`；公网地址低于 `require` 拒绝服务（fail-closed） | `prefer` |
-| `GAUSSDB_DATA_MCP_DB_SSLROOTCERT` | 否 | CA 证书路径（verify-ca/verify-full；pyodbc 轨必须显式配置） | 空 |
-| `GAUSSDB_DATA_MCP_DB_SSLCERT` | 否 | 客户端证书（gs_hba cert 认证） | 空 |
-| `GAUSSDB_DATA_MCP_DB_SSLKEY` | 否 | 客户端私钥（gs_hba cert 认证） | 空 |
-
-credentials.json 字段：`host`、`port`、`dbname`、`user`、`password`、`sslmode`
-（可选 `sslrootcert` / `sslcert` / `sslkey`）。示例见 `credentials.example.json` 与
-`tokens.example.json`。
-
-**host 支持三种部署网络形态**（按企业网络环境选择）：
-
-| 形态 | host 填法 | 公网暴露 |
+| 变量 | 默认 | 说明 |
 |---|---|---|
-| VPC 内 / ECS 部署 | 数据库**内网 IP**（192.168.x.x）或实例域名 | 数据库零公网 |
-| **专线/云下打通** | 数据库**内网 IP**（专线内网互通，推荐企业场景） | 数据库零公网且零 EIP |
-| 公网直连 | 数据库 **EIP**（sslmode 必须 ≥ require，见护栏） | 有公网（强制 SSL 兜底） |
+| `GAUSSDB_DATA_MCP_DRIVER` | `auto` | 设 `das` 启用 DAS 轨 |
+| `GAUSSDB_DATA_MCP_READ_ONLY` | `true` | 拦截 WRITE/DANGEROUS 工具 |
+| `GAUSSDB_DATA_MCP_ENABLE_DDL` | `false` | 开启 DANGEROUS（DDL）通道 |
+| `GAUSSDB_DATA_MCP_CREDENTIALS_FILE` | 空 | credentials.json 路径 |
+| `GAUSSDB_DATA_MCP_TOKENS_FILE` | 空 | HTTP Bearer token 文件（非回环监听必配） |
+| `GAUSSDB_DATA_MCP_AUDIT_FILE` | 空 | 审计 JSONL（始终同时写 stderr） |
+| `GAUSSDB_DATA_MCP_MAX_ROWS` | `200` | 单次查询行数上限（das 轨同时作为 perpage） |
 
-专线场景下内网 IP 不随 EIP 回收变化，天然规避 EIP 变更断连问题；MCP 可部署云上
-ECS 或客户本地（经专线连库），两种拓扑均零公网暴露。
+## 4. 首次使用流程
 
-### 保护名单盲区
-
-护栏规则匹配的是**工具参数**：工具入参里的资源 ID、名称类参数与显式标签。本服务
-数据面工具的入参是 SQL 文本（`query`、`schema`、`table`），因此参数级资源匹配
-（`resources.ids` / `id_prefixes` / `name_patterns` / `tags`）对 SQL 文本不生效——
-无法按对象名保护语句内的数据库对象。本服务的保护分两级：
-
-1. **工具级（护栏，生效）：** 按 `tools` / `risks` 匹配规则——例如整体 block/confirm
-   DANGEROUS 通道：
-
-   ```yaml
-   rules:
-     - id: protect-ddl-channel
-       action: block          # block / confirm / warn
-       message: "DDL is blocked on this deployment; use the approved change window."
-       match:
-         tools: ["execute_sql_dangerous"]
-         risks: ["DANGEROUS"]
-   ```
-
-   （另见 `guardrails.example.yaml`。）
-
-2. **SQL 级（三层数据防护）：** 语句经 SQL 白名单分类并与工具通道锁强制一致
-   （第一层）、读池连接只读会话（第二层）、数据库最小权限账号（第三层）。
-   `GAUSSDB_DATA_MCP_PROTECTED_*` 变量走同一条护栏管线，在本服务中同样只在工具级
-   生效；SQL 级保护由上述三层承担。
-
-规则在 core 中间件层评估，与只读门、confirm 门叠加；评估器异常时 fail-closed
-（写通道阻断、读通道放行）。
-
-### uvx 运行
-
-git 仓库版（subdirectory 安装）：
-
-```json
-{
-  "mcpServers": {
-    "gaussdb-data": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/huaweicloud/huaweicloud-mcp#subdirectory=server/mcp_server_gaussdb_data",
-        "mcp_server_gaussdb_data"
-      ],
-      "env": {
-        "GAUSSDB_DATA_MCP_CREDENTIALS_FILE": ""
-      }
-    }
-  }
-}
+```text
+1) list_user_databases
+   ├─ status=ready（dbname 已是用户库）→ 直接执行 SQL
+   ├─ status=guidance_needed + user_databases 非空
+   │    → 从清单选择，把 dbname 改为目标库（热轮换即生效）
+   └─ status=guidance_needed + 无用户库
+        → execute_sql_dangerous("CREATE DATABASE mydb")   ← 自动带 panelKey，verified 确认建成
+        → dbname 改为 mydb
+2) 之后一切操作（读写/建表/DML/Oracle 语法）都在该用户库执行
 ```
 
-PyPI 版配置（`"command": "uvx", "args": ["mcp_server_gaussdb_data"]`）待包发布到
-PyPI 后补充。
+系统库（postgres/template*）只用于查系统目录与建库，**不要**在其中建业务表（pg 库 DDL 会挂死）。
 
-## 示例
+## 5. 工具（11 个）
 
-### Claude Code（stdio）
+| 工具 | 通道 | 用途 |
+|---|---|---|
+| `execute_sql` | READ | 单条只读 SQL（SELECT/SHOW/EXPLAIN/TABLE/WITH…SELECT） |
+| `execute_sql_write` | WRITE | 单条 DML（INSERT/UPDATE/DELETE/MERGE） |
+| `execute_sql_dangerous` | DANGEROUS | 单条 DDL（确认信封 + `ENABLE_DDL=true`；建库自动带 panelKey 并返回 verified） |
+| `explain_sql` | READ | SELECT 类语句的执行计划 |
+| `list_schemas` / `list_tables` / `describe_table` | READ | schema/表/列浏览（describe 含列注释） |
+| `is_database_connected` / `get_connection_info` | READ | 探活（SELECT 1）/ 池与凭证状态 |
+| `list_user_databases` | READ | 用户库清单 + 兼容模式 + 引导（status=ready/guidance_needed） |
+| `register_das_connection` | WRITE | 注册 DAS 连接（RegisterDbUser）并写回 credentials——首次接入用 |
 
-`.mcp.json`（项目级）或 `~/.claude.json`：
+每次调用恰好执行一条语句；多语句、UTILITY、危险函数默认拒绝。CREATE/DROP DATABASE 的响应含 `verified` 字段（自动查 pg_database 确认生效——DAS 侧"受理成功"不等于实际执行）。
 
-```json
-{
-  "mcpServers": {
-    "gaussdb-data": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "/path/to/huaweicloud-mcp/server/mcp_server_gaussdb_data",
-        "mcp_server_gaussdb_data"
-      ],
-      "env": {
-        "GAUSSDB_DATA_MCP_CREDENTIALS_FILE": "/path/to/credentials.json",
-        "GAUSSDB_DATA_MCP_AUDIT_FILE": "/path/to/audit.jsonl"
-      }
-    }
-  }
-}
-```
+## 6. 运行期自动机制
 
-### Cursor / 远程客户端（streamable-http + Bearer）
+| 机制 | 触发 | 行为 |
+|---|---|---|
+| panelKey | CREATE/DROP DATABASE | 请求自动携带随机 UUID（否则 DAS 包事务执行，GaussDB 拒绝且错误被吞、伪装成功） |
+| errorMessage fail-fast | DAS 吞错（状态层全"成功"） | 立即抛 `GAUSSDB_DATA_MCP_SQL_ERROR` |
+| verified | 建库/删库完成 | 自动查 pg_database 确认生效 |
+| 空壳自愈 | 会话失效（取结果空壳） | 自动 `retry_login`（带密码）并重试一次 |
+| 限流退避 | 请求挂死 | 不自动重试，报错交由调用方决策 |
 
-启动服务：
+## 7. 使用纪律
+
+- **DAS 对连接有调用频率保护**（超限后无响应式封锁，不返回 429）；DAS 控制台界面与 MCP **共享同一连接配额**——保持低频，请求挂死时**不要重试**（等待或重建连接）
+- 业务操作一律在用户库执行；系统库只做建库引导与系统目录查询
+- 连接会话失效且 credentials 未配密码时无法自动自愈——要么补配密码，要么控制台重新登录激活
+
+## 8. 部署（streamable-http + Bearer）
 
 ```bash
-GAUSSDB_DATA_MCP_CREDENTIALS_FILE=/path/to/credentials.json \
-GAUSSDB_DATA_MCP_TOKENS_FILE=/path/to/tokens.json \
-MCP_SERVER_HOST=127.0.0.1 \
-  uv run mcp_server_gaussdb_data -t streamable-http
+GAUSSDB_DATA_MCP_DRIVER=das \
+GAUSSDB_DATA_MCP_CREDENTIALS_FILE=/path/credentials.json \
+GAUSSDB_DATA_MCP_TOKENS_FILE=/path/tokens.json \
+  uv run gaussdb-data-mcp -t streamable-http
 ```
 
-客户端配置：
-
-```json
-{
-  "mcpServers": {
-    "gaussdb-data": {
-      "url": "http://127.0.0.1:8000/mcp",
-      "headers": { "Authorization": "Bearer <token>" }
-    }
-  }
-}
-```
-
-自然语言使用：
-
-- "列出我能看到哪些 schema 和表" → `list_schemas` / `list_tables`
-- "看下 orders 表有哪些字段" → `describe_table`
-- "查本月金额最高的 10 笔订单" → `execute_sql`
-- "往 orders 里插一行" → `execute_sql_write`（需 `READ_ONLY=false`）
-- "给 orders.created_at 建个索引" → `execute_sql_dangerous`
-  （先返回确认信封，复核后带 `confirm=true` 重调）
+客户端：`{"url": "http://<host>:8000/mcp", "headers": {"Authorization": "Bearer <token>"}}`。审计 JSONL 与 token 轮换细节见 `--help` 与源码内注释。
 
 ## 许可证
 

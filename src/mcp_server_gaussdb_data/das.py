@@ -19,8 +19,6 @@ import hmac
 import json
 import re
 import threading
-import time
-import uuid
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -40,6 +38,9 @@ _IAM_HOST = "iam.myhuaweicloud.com"
 _TIMEOUT = 30
 # 跨库 DDL 语句识别（大小写不敏感）：此类语句必须携带 panelKey（survey/07 实测）
 _CROSS_DB_DDL_RE = re.compile(r"^\s*(CREATE|DROP)\s+DATABASE\b", re.IGNORECASE)
+# panelKey 必须为服务端认可的有效面板会话 id（2026-11-09 实测：随机 UUID 不被
+# 识别，走事务路径必败；研发提供的固定值生效——test_flow_db 建成。发放机制待研发确认）
+_PANEL_KEY = "c1eac952-4d96-4f50-8873-86015231"
 
 
 def _url_quote(s: str) -> str:
@@ -175,22 +176,6 @@ class DasBackend:
             )
         return uid
 
-    def _ensure_connection(self, creds: DbCredentials, settings: Any) -> DbCredentials:
-        """connection_id 缺失：自动 RegisterDbUser 并原子写回 credentials.json（§8）。"""
-        if not (creds.instance_id and creds.user and creds.password):
-            raise _die(
-                "GAUSSDB_DATA_MCP_DAS_NO_CONNECTION",
-                "das driver requires das_connection_id; auto-register needs "
-                "instance_id/user/password in the instance entry.",
-            )
-        new_id = self.register_db_user(creds, creds.instance_id)
-        if settings.credentials_file:
-            from .credentials import save_das_connection
-            save_das_connection(
-                settings.credentials_file, creds.instance_id, new_id, creds.dbname or None
-            )
-        return replace(creds, das_connection_id=new_id)
-
     def execute(self, creds: DbCredentials, settings: Any, sql: str) -> dict[str, Any]:
         """两步异步：执行受理 → 立即取结果。返回原始驼峰响应 dict。
 
@@ -199,24 +184,37 @@ class DasBackend:
         """
         if not creds.dbname:
             raise _die("GAUSSDB_DATA_MCP_DAS_NO_DATABASE", "das driver requires database_name.")
-        if not creds.das_connection_id:
-            creds = self._ensure_connection(creds, settings)  # 幂等：映射缺失才注册
-        http = self._http(creds)
         conn = creds.das_connection_id
+        if not conn:
+            raise _die(
+                "GAUSSDB_DATA_MCP_DAS_NO_CONNECTION",
+                "das driver requires das_connection_id (from DAS console login).",
+                hint="Log into the instance in the DAS console, then set das_connection_id "
+                     "in the credentials entry. Registration-based connections are not the "
+                     "primary path (user 2026-11-09 decision).",
+            )
+        http = self._http(creds)
+        # 会话生命周期（2026-11-20 实测）：login 激活一次后会话持续有效（小时级），
+        # 期间 execute 直接执行（零 login 零密码）；失效时 execute 返回空壳 →
+        # 下方空壳自愈 retry_login 一次恢复。**不做每次前置 login**（实测无必要）。
         body = {
             "database_name": creds.dbname,
-            "schema_name": creds.das_schema,
+            # schema 按语句类型动态选择（2026-11-09 实测）：
+            #   - CREATE/DROP DATABASE 须 dbe_alert（配合 panelKey 走非事务路径；
+            #     public 下被 DAS 包事务吞错伪装成功）
+            #   - 业务 DDL/DML 须 public（dbe_alert 是系统 schema，建表报
+            #     "System catalog modifications are currently disallowed"）
+            "schema_name": (
+                "dbe_alert" if _CROSS_DB_DDL_RE.match(sql) else creds.das_schema
+            ),
             "sql_script": sql,
             "curpage": 1,
             "perpage": settings.max_rows,
             "ignore_limit": False,
         }
-        # panelKey（研发方案 1，2026-11-06）：**CREATE/DROP DATABASE 必须携带**——
-        # 无 panelKey 时 DAS 包事务执行，GaussDB 拒绝并吞错伪装成功（实测 5 次，
-        # 与 database_name 无关）；带 panelKey 走非事务上下文实测生效（test_panel/
-        # test_flow_db2 建成 compat=A）。其他语句不加（数据一致性约束）。
+        # panelKey：CREATE/DROP DATABASE 必须携带有效面板 id（survey/07 实测）
         if _CROSS_DB_DDL_RE.match(sql):
-            body["panelKey"] = str(uuid.uuid4())
+            body["panelKey"] = _PANEL_KEY
         resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
         exec_id = resp.get("executeId")
         if not resp.get("success") or not exec_id:

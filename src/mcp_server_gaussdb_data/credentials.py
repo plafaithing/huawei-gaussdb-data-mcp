@@ -106,7 +106,7 @@ class DbCredentials:
     das_sk: str = field(default="", repr=False)
     das_project_id: str = ""
     das_region: str = "cn-north-4"
-    das_schema: str = "dbe_alert"
+    das_schema: str = "public"
     instance_id: str = ""
 
     @property
@@ -168,7 +168,7 @@ class DbCredentials:
                 das_ak=ak, das_sk=sk,
                 das_project_id=pick("project_id", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
                 das_region=normalize_region(entry_pick("region", region)) or region,
-                das_schema=entry_pick("schema", "dbe_alert"),
+                das_schema=entry_pick("schema", "public"),
             )
         else:
             creds = cls(
@@ -181,7 +181,7 @@ class DbCredentials:
                 das_sk=pick("sk", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_SK"),
                 das_project_id=pick("project_id", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
                 das_region=normalize_region(pick("region", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_REGION")) or "cn-north-4",
-                das_schema=pick("schema", "") or "dbe_alert",
+                das_schema=pick("schema", "") or "public",
             )
         missing = [
             k for k, v in (("ak", creds.das_ak), ("sk", creds.das_sk), ("region", creds.das_region))

@@ -17,7 +17,7 @@ def _creds(**kw):
     base = dict(
         host="", port=0, dbname="postgres", user="root", password="pw",
         das_connection_id="conn-1", das_ak="ak", das_sk="sk",
-        das_project_id="proj", das_region="cn-north-4", das_schema="dbe_alert",
+        das_project_id="proj", das_region="cn-north-4", das_schema="public",
     )
     base.update(kw)
     return DbCredentials(**base)
@@ -29,6 +29,8 @@ class _FakeHttp:
         self.calls = []
 
     def post(self, path, body):
+        if "login-actions" in path:
+            return {}  # 前置登录被 mock 吸收（不消费队列、不计 calls）
         self.calls.append((path, body))
         r = self._responses.pop(0)
         if isinstance(r, Exception):
@@ -60,7 +62,7 @@ def test_execute_two_steps_and_parsing():
     cur.execute("SELECT 1")
     assert http.calls[0][0].endswith("async-execute-sql-without-key")
     body = http.calls[0][1]
-    assert body["database_name"] == "postgres" and body["schema_name"] == "dbe_alert"
+    assert body["database_name"] == "postgres" and body["schema_name"] == "public"
     assert body["ignore_limit"] is False
     assert http.calls[1][1] == {"execute_id": "e1"}
     assert [d[0] for d in cur.description] == ["datname", "datdba"]   # label 还原
@@ -79,7 +81,6 @@ def test_result_5018_self_heal():
     http = _FakeHttp([
         {"success": True, "executeId": "e3"},
         {"errorCodeStr": "DAS.5018"},                             # 取结果时失效
-        {},                                                        # relogin
         {"success": True, "executeId": "e4"},                      # 重新受理
         dict(_RAW_RESULT),                                         # 重新取结果
     ])
@@ -132,14 +133,13 @@ def test_blank_shell_self_heal():
     http = _FakeHttp([
         {"success": True, "executeId": "e6"},
         {"rows": 0, "metadata": None, "columnValues": None, "executeStatus": None},  # 空壳
-        {},                                   # relogin
         {"success": True, "executeId": "e7"},
         dict(_RAW_RESULT),
     ])
     b = _backend(http)
     cur = das_mod.DasCursor(b, _creds(), _settings())
     cur.execute("SELECT 1")
-    assert "login-actions" in http.calls[2][0]
+    assert http.calls[2][0].endswith("async-execute-sql-without-key")  # login 被 mock 吸收，重试受理在 calls[2]
     assert len(cur.fetchall()) == 2
 
 
@@ -149,7 +149,7 @@ def test_v2_multi_instance(tmp_path, monkeypatch):
     cred.write_text(_json.dumps({
         'ak': 'AKX', 'sk': 'SKX', 'region': '北京四', 'default_instance': 'inst-a',
         'instances': {
-            'inst-a': {'das_connection_id': 'conn-a', 'dbname': 'test'},
+            'inst-a': {'das_connection_id': 'conn-a', 'dbname': 'test', 'user': 'u', 'password': 'p'},
             'inst-b': {'user': 'root', 'password': 'pw', 'dbname': 'postgres'},
         }}), encoding='utf-8')
     monkeypatch.setenv('GAUSSDB_DATA_MCP_DRIVER', 'das')
@@ -184,11 +184,11 @@ def test_create_database_uses_dbe_alert_schema():
     assert http.calls[0][1]['schema_name'] == 'dbe_alert'
 
 
-def test_normal_sql_uses_dbe_alert_default():
+def test_normal_sql_uses_public_schema():
     http = _FakeHttp([{'success': True, 'executeId': 'e9'}, dict(_RAW_RESULT)])
     b = _backend(http)
     das_mod.DasCursor(b, _creds(), _settings()).execute('SELECT 1 FROM t')
-    assert http.calls[0][1]['schema_name'] == 'dbe_alert'
+    assert http.calls[0][1]['schema_name'] == 'public'
 
 
 def test_swallowed_sql_error_fails_fast():
@@ -206,10 +206,10 @@ def test_panel_key_only_for_cross_db_ddl():
     # panelKey 仅在 postgres 库 + DDL 时附加（pg 库全部 DDL 挂死实测；数据一致性约束）
     http_db = _FakeHttp([{'success': True, 'executeId': 'eb2'}, dict(_RAW_RESULT)])
     das_mod.DasCursor(_backend(http_db), _creds(), _settings()).execute('CREATE DATABASE x')
-    assert 'panelKey' in http_db.calls[0][1]
+    assert http_db.calls[0][1]['panelKey'] == 'c1eac952-4d96-4f50-8873-86015231'
     http_drop = _FakeHttp([{'success': True, 'executeId': 'ee'}, dict(_RAW_RESULT)])
     das_mod.DasCursor(_backend(http_drop), _creds(), _settings()).execute('DROP DATABASE x')
-    assert 'panelKey' in http_drop.calls[0][1]
+    assert http_drop.calls[0][1]['panelKey'] == 'c1eac952-4d96-4f50-8873-86015231'
     http_tbl = _FakeHttp([{'success': True, 'executeId': 'ef'}, dict(_RAW_RESULT)])
     das_mod.DasCursor(_backend(http_tbl), _creds(), _settings()).execute('CREATE TABLE x (id int)')
     assert 'panelKey' not in http_tbl.calls[0][1]
@@ -225,7 +225,7 @@ def test_list_user_databases_status_ready(monkeypatch, tmp_path):
     cred = tmp_path / 'cred.json'
     cred.write_text(json.dumps({'ak': 'A', 'sk': 'S', 'region': 'cn-north-4',
         'default_instance': 'i1',
-        'instances': {'i1': {'das_connection_id': 'c1', 'dbname': 'test'}}}), encoding='utf-8')
+        'instances': {'i1': {'das_connection_id': 'c1', 'dbname': 'test', 'password': 'p'}}}), encoding='utf-8')
     monkeypatch.setenv('GAUSSDB_DATA_MCP_DRIVER', 'das')
     monkeypatch.setenv('GAUSSDB_DATA_MCP_CREDENTIALS_FILE', str(cred))
     from mcp_server_gaussdb_data.tools import connection as conn_tools

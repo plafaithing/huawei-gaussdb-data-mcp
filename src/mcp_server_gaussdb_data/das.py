@@ -19,6 +19,7 @@ import hmac
 import json
 import re
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -194,9 +195,15 @@ class DasBackend:
                      "primary path (user 2026-11-09 decision).",
             )
         http = self._http(creds)
-        # 会话生命周期（2026-11-20 实测）：login 激活一次后会话持续有效（小时级），
-        # 期间 execute 直接执行（零 login 零密码）；失效时 execute 返回空壳 →
-        # 下方空壳自愈 retry_login 一次恢复。**不做每次前置 login**（实测无必要）。
+        # 会话生命周期（2026-11-20 实测）：login 激活一次后会话持续有效（小时级）。
+        # 首连保护：未激活过的连接直接 execute 会在服务端挂死并堵死该连接队列
+        # （CONNECTION_ALREADY_LOGOUT 家族）——首次先 login，成功后标记 activated。
+        if not creds.das_activated:
+            self._relogin(creds, http, conn)  # 首连保护：未激活连接先 login
+            if settings.credentials_file:
+                from .credentials import save_das_connection
+                save_das_connection(settings.credentials_file, creds.instance_id,
+                                    creds.das_connection_id, creds.dbname or None)
         body = {
             "database_name": creds.dbname,
             # schema 按语句类型动态选择（2026-11-09 实测）：
@@ -229,6 +236,7 @@ class DasBackend:
         # login(username-only) 自愈（DAS 用托管密码，零密码输入）后整链重试；5018 同走此路
         if not (result.get("metadata") or result.get("columnValues") or result.get("executeStatus")):
             self._relogin(creds, http, conn)
+            time.sleep(3)  # L14：错误后立即重试会撞服务端挂起态，退避后再试
             resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
             exec_id = resp.get("executeId")
             if not resp.get("success") or not exec_id:
@@ -240,6 +248,10 @@ class DasBackend:
                 _RESULT_PATH.format(project=self._project(creds), conn=conn), {"execute_id": exec_id}
             )
         self._check_sql_error(result)
+        if not creds.das_activated and settings.credentials_file:
+            from .credentials import save_das_connection
+            save_das_connection(settings.credentials_file, creds.instance_id,
+                                creds.das_connection_id, creds.dbname or None, activated=True)
         return result
 
     @staticmethod

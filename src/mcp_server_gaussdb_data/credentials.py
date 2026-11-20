@@ -108,6 +108,7 @@ class DbCredentials:
     das_region: str = "cn-north-4"
     das_schema: str = "public"
     instance_id: str = ""
+    das_activated: bool = False
 
     @property
     def connect_kwargs(self) -> dict[str, Any]:
@@ -169,6 +170,7 @@ class DbCredentials:
                 das_project_id=pick("project_id", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
                 das_region=normalize_region(entry_pick("region", region)) or region,
                 das_schema=entry_pick("schema", "public"),
+            das_activated=bool(entry_pick("activated", False)),
             )
         else:
             creds = cls(
@@ -182,9 +184,11 @@ class DbCredentials:
                 das_project_id=pick("project_id", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
                 das_region=normalize_region(pick("region", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_REGION")) or "cn-north-4",
                 das_schema=pick("schema", "") or "public",
+                das_activated=bool(pick("activated", False)),
             )
         missing = [
-            k for k, v in (("ak", creds.das_ak), ("sk", creds.das_sk), ("region", creds.das_region))
+            k for k, v in (("ak", creds.das_ak), ("sk", creds.das_sk), ("region", creds.das_region),
+                           ("password", creds.password))
             if not v
         ]
         if missing:
@@ -269,7 +273,7 @@ class DbCredentials:
 
 
 def save_das_connection(path: str, instance_id: str, connection_id: str,
-                        dbname: str | None = None) -> None:
+                        dbname: str | None = None, activated: bool | None = None) -> None:
     """把 RegisterDbUser 产物原子写回 credentials.json（v2 instances 结构；0600 保持）。
 
     v1 平铺结构遇到时升级为 v2（把平铺 das_connection_id 迁入 instances）。调用方负责
@@ -291,6 +295,8 @@ def save_das_connection(path: str, instance_id: str, connection_id: str,
     entry["das_connection_id"] = str(connection_id)
     if dbname:
         entry["dbname"] = dbname
+    if activated is not None:
+        entry["activated"] = bool(activated)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)) or ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

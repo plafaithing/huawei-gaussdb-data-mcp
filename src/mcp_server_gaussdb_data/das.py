@@ -137,9 +137,8 @@ class DasBackend:
 
     # -- DAS 执行 ---------------------------------------------------------------
     def _http(self, creds: DbCredentials) -> _DasHttp:
-        return _DasHttp(
-            host=f"das.{creds.das_region}.myhuaweicloud.com", ak=creds.das_ak, sk=creds.das_sk
-        )
+        host = creds.das_host or f"das.{creds.das_region}.myhuaweicloud.com"
+        return _DasHttp(host=host, ak=creds.das_ak, sk=creds.das_sk)
 
     def _project(self, creds: DbCredentials) -> str:
         if creds.das_project_id:
@@ -164,11 +163,12 @@ class DasBackend:
 
     def register_db_user(self, creds: DbCredentials, instance_id: str) -> str:
         """DAS RegisterDbUser（datastore_type=gaussdbv5，survey/07 §8）；返回 db_user_id。"""
+        body = {"db_username": creds.user, "db_user_password": creds.password,
+                "datastore_type": _REGISTER_DATASTORE}
+        if creds.dbname:
+            body["database_name"] = creds.dbname  # 测试环境实测：注册时可指定默认库
         resp = self._http(creds).post(
-            _REGISTER_PATH.format(project=self._project(creds), iid=instance_id),
-            {"db_username": creds.user, "db_user_password": creds.password,
-             "datastore_type": _REGISTER_DATASTORE},
-        )
+            _REGISTER_PATH.format(project=self._project(creds), iid=instance_id), body)
         uid = resp.get("db_user_id")
         if not uid:
             raise _die(

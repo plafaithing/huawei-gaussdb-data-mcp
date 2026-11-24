@@ -107,6 +107,7 @@ class DbCredentials:
     das_project_id: str = ""
     das_region: str = "cn-north-4"
     das_schema: str = "public"
+    das_host: str = ""
     instance_id: str = ""
     das_activated: bool = False
 
@@ -170,6 +171,7 @@ class DbCredentials:
                 das_project_id=pick("project_id", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
                 das_region=normalize_region(entry_pick("region", region)) or region,
                 das_schema=entry_pick("schema", "public"),
+            das_host=entry_pick("das_host", ""),
             das_activated=bool(entry_pick("activated", False)),
             )
         else:
@@ -184,6 +186,7 @@ class DbCredentials:
                 das_project_id=pick("project_id", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
                 das_region=normalize_region(pick("region", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_REGION")) or "cn-north-4",
                 das_schema=pick("schema", "") or "public",
+                das_host=pick("das_host", ""),
                 das_activated=bool(pick("activated", False)),
             )
         missing = [

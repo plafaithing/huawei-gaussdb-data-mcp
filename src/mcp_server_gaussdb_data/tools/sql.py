@@ -115,7 +115,7 @@ def _run_channel(query: str, channel: ToolRisk, instance: str | None = None) -> 
         raise _exec_failed(exc) from exc
     out: dict[str, Any] = {"statement_kind": result.kind, "rows_affected": affected}
     # das 轨受理 success ≠ 生效（survey/07）：DDL 后必须查询验证创建结果（用户规则）
-    if settings.driver == "das" and channel is ToolRisk.DANGEROUS:
+    if channel is ToolRisk.DANGEROUS:
         try:
             out["verified"] = _das_verify_database(creds, settings, query)
         except Exception:

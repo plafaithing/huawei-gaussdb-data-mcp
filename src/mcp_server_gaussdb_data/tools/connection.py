@@ -35,12 +35,11 @@ async def is_database_connected(instance: str | None = None) -> dict[str, Any]:
 
     def _probe() -> dict[str, Any]:
         settings = _settings()
-        driver = "das"
         creds = DbCredentials.load(settings, instance)
         pool = _pool(settings)
         state: dict[str, Any] = {
             "connected": False,
-            "driver": driver.driver_name(),
+            "driver": "das",
             "pool_free": pool.free_count(),
         }
         try:
@@ -72,8 +71,8 @@ async def get_connection_info(instance: str | None = None) -> dict[str, Any]:
         return {
             "pool_free": pool.free_count(),
             "driver": "das",
-            "host": creds.host,
-            "port": creds.port,
+            "das_host": creds.das_host or f"das.{creds.das_region}.myhuaweicloud.com",
+            "instance_id": creds.instance_id,
             "dbname": creds.dbname,
             "user": creds.user,
             "credential_fingerprint": creds.fingerprint,
@@ -101,11 +100,6 @@ async def register_das_connection(instance_id: str, username: str, password: str
 
     def _reg() -> dict[str, Any]:
         settings = _settings()
-        if settings.driver != "das":
-            raise McpToolError(
-                "GAUSSDB_DATA_MCP_DRIVER_MISMATCH",
-                "register_das_connection requires GAUSSDB_DATA_MCP_DRIVER=das.",
-            )
         base = DbCredentials.load(settings, instance_id)  # 全局 ak/sk/region + 实例条目
         creds = _dc_replace(base, user=username, password=password)
         conn_id = _pool(settings).register_db_user(creds, instance_id)

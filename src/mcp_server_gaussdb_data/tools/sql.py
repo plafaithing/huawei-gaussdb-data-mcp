@@ -16,7 +16,7 @@ from huaweicloud_mcp_core.errors import McpToolError
 
 from ..config import DataMcpSettings
 from ..credentials import DbCredentials
-from ..db import ConnectionPool, _cursor
+from ..das import get_das_backend, _cursor
 from ..sql_guard import SqlClassification, classify_sql
 
 _POOL: ConnectionPool | None = None
@@ -24,15 +24,11 @@ _POOL_LOCK = threading.Lock()
 
 
 def _pool(settings: DataMcpSettings) -> Any:
-    """延迟初始化：das 轰走 DAS 后端（无池），否则 DB 协议连接池。"""
+    """延迟初始化 DAS 后端（das-only 唯一后端）。"""
     global _POOL
     with _POOL_LOCK:
         if _POOL is None:
-            if settings.driver == "das":
-                from ..das import get_das_backend
-                _POOL = get_das_backend(settings)
-            else:
-                _POOL = ConnectionPool(pool_min=settings.pool_min, pool_max=settings.pool_max)
+            _POOL = get_das_backend(settings)
         return _POOL
 
 

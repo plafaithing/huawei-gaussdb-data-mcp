@@ -115,6 +115,16 @@ class _DasHttp:
             return {"_status": resp.status_code, "_text": resp.text[:200]}
 
 
+@contextmanager
+def _cursor(conn: Any) -> Iterator[Any]:
+    """cursor 上下文（原 db.py 的 helper；das 轨 cursor 自带 close）。"""
+    cur = conn.cursor()
+    try:
+        yield cur
+    finally:
+        cur.close()
+
+
 class DasBackend:
     """与 ConnectionPool 同接口的 DAS 后端：read_connection/run_write/free_count。"""
 
@@ -353,7 +363,7 @@ class DasConnection:
 
 
 class DasDriver:
-    """驱动元信息（drivers.get_driver 的 das 分支）：与 Psycopg2Driver 同接口。"""
+    """das 轨元信息（driver_name/placeholder 契约）。"""
 
     def driver_name(self) -> str:
         return "das"

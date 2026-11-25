@@ -14,8 +14,7 @@ from huaweicloud_mcp_core import ToolRisk, guard
 from huaweicloud_mcp_core.errors import McpToolError
 
 from ..credentials import DbCredentials
-from ..db import _cursor
-from ..drivers import get_driver
+from ..das import _cursor
 from .sql import _exec_failed, _format_rows, _pool, _settings
 
 # GaussDB 对象名允许 $（A 兼容模式，survey/03），故白名单含之；
@@ -67,7 +66,7 @@ async def list_tables(schema: str = "public", instance: str | None = None) -> di
         schema: Schema name, default public.
     """
     _validate_identifier(schema, "schema")
-    ph = get_driver().placeholder()  # psycopg2 "%s" / pyodbc "?"，对调用方透明
+    ph = "%s"  # das 轨位置参数占位符
     return await asyncio.to_thread(
         _query,
         f"SELECT table_name, table_type FROM information_schema.tables "
@@ -88,7 +87,7 @@ async def describe_table(schema: str, table: str, instance: str | None = None) -
     """
     _validate_identifier(schema, "schema")
     _validate_identifier(table, "table")
-    ph = get_driver().placeholder()
+    ph = "%s"
     return await asyncio.to_thread(
         _query,
         # 列注释存在 pg_description（与 information_schema 分离），经 col_description

@@ -7,15 +7,13 @@ from mcp_server_gaussdb_data.credentials import DbCredentials
 from mcp_server_gaussdb_data.config import DataMcpSettings
 
 
-def _settings(driver="das"):
-    return DataMcpSettings.from_env.__wrapped__() if False else DataMcpSettings(
-        driver=driver, max_rows=200,
-    )
+def _settings():
+    return DataMcpSettings(max_rows=200)
 
 
 def _creds(**kw):
     base = dict(
-        host="", port=0, dbname="postgres", user="root", password="pw",
+        dbname="postgres", user="root", password="pw",
         das_connection_id="conn-1", das_ak="ak", das_sk="sk",
         das_project_id="proj", das_region="cn-north-4", das_schema="public",
     )
@@ -264,7 +262,7 @@ def test_ensure_connection_dedup_then_register(tmp_path, monkeypatch):
         dict(_RAW_RESULT),
     ]))
     b._find_db_user = lambda c, iid: 'found-1'
-    r = b.execute(DbCredentials(host='', port=0, dbname='test', user='root', password='p',
+    r = b.execute(DbCredentials(dbname='test', user='root', password='p',
                                 das_ak='A', das_sk='S', das_region='cn-north-4',
                                 das_project_id='proj', instance_id='i1'), s, 'SELECT 1')
     assert r.get('rows') == 2

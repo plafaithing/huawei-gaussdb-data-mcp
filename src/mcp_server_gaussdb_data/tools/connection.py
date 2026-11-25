@@ -15,8 +15,7 @@ from huaweicloud_mcp_core import ToolRisk, guard
 from huaweicloud_mcp_core.errors import McpToolError
 
 from ..credentials import DbCredentials
-from ..db import _cursor
-from ..drivers import get_driver
+from ..das import _cursor
 from .sql import _pool, _settings
 
 # GaussDB 系统库（das 轨 pg_database 实测全集）；用户库 = 全集剔除后的部分
@@ -36,7 +35,7 @@ async def is_database_connected(instance: str | None = None) -> dict[str, Any]:
 
     def _probe() -> dict[str, Any]:
         settings = _settings()
-        driver = get_driver()
+        driver = "das"
         creds = DbCredentials.load(settings, instance)
         pool = _pool(settings)
         state: dict[str, Any] = {
@@ -72,14 +71,12 @@ async def get_connection_info(instance: str | None = None) -> dict[str, Any]:
         pool = _pool(settings)
         return {
             "pool_free": pool.free_count(),
-            "driver": get_driver().driver_name(),
+            "driver": "das",
             "host": creds.host,
             "port": creds.port,
             "dbname": creds.dbname,
             "user": creds.user,
-            "sslmode": creds.sslmode,
             "credential_fingerprint": creds.fingerprint,
-            "statement_timeout_ms": settings.statement_timeout_ms,
         }
 
     return await asyncio.to_thread(_info)

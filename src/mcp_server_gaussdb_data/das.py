@@ -319,17 +319,18 @@ class DasBackend:
         with self._lock:
             http.post(
                 _LOGIN_PATH.format(project=self._project(creds), conn=conn),
-                {"databaseName": creds.dbname, "isChangePassword": False,
-                 "isSavePassword": True, "password": creds.password,
-                 "username": creds.user},
+                {"retry_login": {"databaseName": creds.dbname,
+                                 "isChangePassword": False, "isSavePassword": True,
+                                 "password": creds.password, "username": creds.user}},
             )
 
     def _relogin_saved(self, creds: DbCredentials, http: _DasHttp, conn: str) -> None:
         with self._lock:
             http.post(
                 _LOGIN_PATH.format(project=self._project(creds), conn=conn),
-                {"databaseName": creds.dbname, "isChangePassword": False,
-                 "isSavePassword": True, "password": None, "username": creds.user},
+                {"retry_login": {"databaseName": creds.dbname,
+                                 "isChangePassword": False, "isSavePassword": True,
+                                 "password": None, "username": creds.user}},
             )
 
 

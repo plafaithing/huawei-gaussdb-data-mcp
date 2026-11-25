@@ -9,5 +9,5 @@ rules:
     action: block          # block / confirm / warn
     message: "DDL is blocked on this deployment; use the approved change window."
     match:
-      tools: ["execute_sql_dangerous"]
+      tools: ["gaussdb_execute_sql_dangerous"]
       risks: ["DANGEROUS"]

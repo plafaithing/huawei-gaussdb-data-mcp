@@ -74,17 +74,17 @@ def build_sql_server() -> MCPServer:
     from .tools import sql as sql_tools
 
     for tool_fn in (
-        sql_tools.execute_sql,
-        sql_tools.execute_sql_write,
-        sql_tools.execute_sql_dangerous,
-        sql_tools.explain_sql,
-        metadata_tools.list_schemas,
-        metadata_tools.list_tables,
-        metadata_tools.describe_table,
-        connection_tools.is_database_connected,
-        connection_tools.get_connection_info,
-        connection_tools.list_user_databases,
-        connection_tools.register_das_connection,
+        sql_tools.gaussdb_execute_sql,
+        sql_tools.gaussdb_execute_sql_write,
+        sql_tools.gaussdb_execute_sql_dangerous,
+        sql_tools.gaussdb_explain_sql,
+        metadata_tools.gaussdb_list_schemas,
+        metadata_tools.gaussdb_list_tables,
+        metadata_tools.gaussdb_describe_table,
+        connection_tools.gaussdb_is_database_connected,
+        connection_tools.gaussdb_get_connection_info,
+        connection_tools.gaussdb_list_user_databases,
+        connection_tools.gaussdb_register_das_connection,
     ):
         server.add_tool(tool_fn)
 

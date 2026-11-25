@@ -147,13 +147,13 @@ def _das_verify_database(creds: DbCredentials, settings: DataMcpSettings, query:
 
 
 @guard(risk=ToolRisk.READ)
-async def execute_sql(query: str, instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_execute_sql(query: str, instance: str | None = None) -> dict[str, Any]:
     """Execute one read-only SQL statement against GaussDB (SELECT / VALUES / SHOW /
     EXPLAIN / TABLE / WITH ... SELECT).
 
     Scenario: query business data after inspecting schemas with the metadata tools.
     Statements that modify data are rejected here with GAUSSDB_DATA_MCP_RISK_MISMATCH;
-    use execute_sql_write or execute_sql_dangerous explicitly.
+    use gaussdb_execute_sql_write or gaussdb_execute_sql_dangerous explicitly.
 
     Args:
         query: Exactly one SQL statement. Multi-statement text, PREPARE/EXECUTE, SET,
@@ -163,7 +163,7 @@ async def execute_sql(query: str, instance: str | None = None) -> dict[str, Any]
 
 
 @guard(risk=ToolRisk.WRITE)
-async def execute_sql_write(query: str, confirm: bool = False, instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_execute_sql_write(query: str, confirm: bool = False, instance: str | None = None) -> dict[str, Any]:
     """Execute one data-modifying statement (INSERT / UPDATE / DELETE / MERGE).
 
     Scenario: apply data changes the user explicitly asked for. Requires
@@ -172,14 +172,14 @@ async def execute_sql_write(query: str, confirm: bool = False, instance: str | N
 
     Args:
         query: Exactly one DML statement. DDL inside is rejected; use
-            execute_sql_dangerous for DDL.
+            gaussdb_execute_sql_dangerous for DDL.
         confirm: Reserved for guardrail confirm rules; keep false.
     """
     return await asyncio.to_thread(_run_channel, query, ToolRisk.WRITE, instance)
 
 
 @guard(risk=ToolRisk.DANGEROUS)
-async def execute_sql_dangerous(query: str, confirm: bool = False, instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_execute_sql_dangerous(query: str, confirm: bool = False, instance: str | None = None) -> dict[str, Any]:
     """Execute one DDL statement (CREATE / ALTER / DROP / TRUNCATE / GRANT ...).
 
     Scenario: schema changes requested explicitly by the user. Requires
@@ -194,10 +194,12 @@ async def execute_sql_dangerous(query: str, confirm: bool = False, instance: str
 
 
 @guard(risk=ToolRisk.READ)
-async def explain_sql(query: str, instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_explain_sql(query: str, instance: str | None = None) -> dict[str, Any]:
     """Run EXPLAIN on a SELECT statement without executing it.
 
     Scenario: check the query plan before running an expensive query.
+    Not for DML/DDL statements; use gaussdb_execute_sql_write or
+    gaussdb_execute_sql_dangerous for data modifications.
 
     Args:
         query: One SELECT / TABLE / WITH ... SELECT statement.
@@ -213,7 +215,7 @@ def _run_explain(query: str, instance: str | None = None) -> dict[str, Any]:
     if result.risk is not ToolRisk.READ or result.kind not in {"SELECT", "WITH", "TABLE"}:
         raise McpToolError(
             "GAUSSDB_DATA_MCP_RISK_MISMATCH",
-            f"explain_sql only accepts SELECT-class statements, got {result.kind}.",
+            f"gaussdb_explain_sql only accepts SELECT-class statements, got {result.kind}.",
         )
     creds = DbCredentials.load(settings, instance)
     try:

@@ -216,7 +216,7 @@ def test_panel_key_only_for_cross_db_ddl():
     assert 'panelKey' not in http2.calls[0][1]
 
 
-def test_list_user_databases_status_ready(monkeypatch, tmp_path):
+def test_gaussdb_list_user_databases_status_ready(monkeypatch, tmp_path):
     # dbname 已是用户库 → status=ready，无 guidance（直接使用）
     import asyncio
     import json
@@ -242,7 +242,7 @@ def test_list_user_databases_status_ready(monkeypatch, tmp_path):
         def __exit__(self, *a): pass
     monkeypatch.setattr(conn_tools, '_pool', lambda s: type('B', (), {
         'read_connection': staticmethod(lambda c, settings: _Conn())})())
-    r = asyncio.run(conn_tools.list_user_databases())
+    r = asyncio.run(conn_tools.gaussdb_list_user_databases())
     assert r['status'] == 'ready' and r['user_databases'] == ['test'] and 'guidance' not in r
 
 

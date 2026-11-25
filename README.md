@@ -48,8 +48,8 @@ uv run mcp_server_gaussdb_data -t streamable-http
 |---|---|
 | ak/sk | Huawei Cloud AK/SK (control-plane signature; used by DAS interfaces and the automatic IAM project_id lookup) |
 | region | Localized names supported ("北京四" → cn-north-4 auto-mapped) |
-| das_connection_id | DAS connection id. Source: created when logging into the instance from the DAS console, or produced by the `register_das_connection` tool; **auto-registered when missing** (needs user/password in the entry; RegisterDbUser requires the newer server build) |
-| dbname | Database where SQL runs. **If already a user database it is used directly**; when it lands on a system database (postgres etc.) call `list_user_databases` once for selection/creation guidance |
+| das_connection_id | DAS connection id. Source: created when logging into the instance from the DAS console, or produced by the `gaussdb_register_das_connection` tool; **auto-registered when missing** (needs user/password in the entry; RegisterDbUser requires the newer server build) |
+| dbname | Database where SQL runs. **If already a user database it is used directly**; when it lands on a system database (postgres etc.) call `gaussdb_list_user_databases` once for selection/creation guidance |
 | schema | Default `public` (where business tables/DDL/DML live; use your own business schema if needed). CREATE/DROP DATABASE is routed to the system schema automatically |
 | user/password | Auto `retry_login` (with password — the only reliably verified activation form) when the connection is stale; keep it for fully automatic self-healing |
 
@@ -70,12 +70,12 @@ uv run mcp_server_gaussdb_data -t streamable-http
 ## 4. First-use flow
 
 ```text
-1) list_user_databases
+1) gaussdb_list_user_databases
    ├─ status=ready (dbname is already a user database) → run SQL directly
    ├─ status=guidance_needed + user_databases non-empty
    │    → pick one, set dbname in the credentials entry (hot-reloaded)
    └─ status=guidance_needed + no user database
-        → execute_sql_dangerous("CREATE DATABASE mydb")   ← panelKey auto-applied, verified confirms
+        → gaussdb_execute_sql_dangerous("CREATE DATABASE mydb")   ← panelKey auto-applied, verified confirms
         → set dbname to mydb
 2) All further operations (read/write/DDL/DML/Oracle syntax) run in that user database
    — tables and business objects live in the database's public (or custom) schema; CREATE/DROP DATABASE is routed automatically, no schema concern
@@ -87,14 +87,14 @@ System databases (postgres/template*) are only for catalog queries and database 
 
 | Tool | Channel | Purpose |
 |---|---|---|
-| `execute_sql` | READ | single read-only SQL (SELECT/SHOW/EXPLAIN/TABLE/WITH…SELECT) |
-| `execute_sql_write` | WRITE | single DML (INSERT/UPDATE/DELETE/MERGE) |
-| `execute_sql_dangerous` | DANGEROUS | single DDL (confirmation envelope + `ENABLE_DDL=true`; CREATE DATABASE auto-applies panelKey and returns verified) |
-| `explain_sql` | READ | execution plan for SELECT-class statements |
-| `list_schemas` / `list_tables` / `describe_table` | READ | schema/table/column browsing (describe includes column comments) |
-| `is_database_connected` / `get_connection_info` | READ | liveness (SELECT 1) / pool & credential status |
-| `list_user_databases` | READ | user database list + compatibility mode + guidance (status=ready/guidance_needed) |
-| `register_das_connection` | WRITE | register a DAS connection (RegisterDbUser) and persist it to credentials |
+| `gaussdb_execute_sql` | READ | single read-only SQL (SELECT/SHOW/EXPLAIN/TABLE/WITH…SELECT) |
+| `gaussdb_execute_sql_write` | WRITE | single DML (INSERT/UPDATE/DELETE/MERGE) |
+| `gaussdb_execute_sql_dangerous` | DANGEROUS | single DDL (confirmation envelope + `ENABLE_DDL=true`; CREATE DATABASE auto-applies panelKey and returns verified) |
+| `gaussdb_explain_sql` | READ | execution plan for SELECT-class statements |
+| `gaussdb_list_schemas` / `gaussdb_list_tables` / `gaussdb_describe_table` | READ | schema/table/column browsing (describe includes column comments) |
+| `gaussdb_is_database_connected` / `gaussdb_get_connection_info` | READ | liveness (SELECT 1) / pool & credential status |
+| `gaussdb_list_user_databases` | READ | user database list + compatibility mode + guidance (status=ready/guidance_needed) |
+| `gaussdb_register_das_connection` | WRITE | register a DAS connection (RegisterDbUser) and persist it to credentials |
 
 Exactly one statement per call; multi-statement, UTILITY and dangerous functions are rejected by default. CREATE/DROP DATABASE responses carry a `verified` field (pg_database is queried automatically — a DAS "accepted" response does not mean it executed).
 

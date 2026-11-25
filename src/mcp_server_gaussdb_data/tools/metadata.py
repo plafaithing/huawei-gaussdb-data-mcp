@@ -46,10 +46,12 @@ def _query(sql: str, params: tuple, instance: str | None = None) -> dict[str, An
 
 
 @guard(risk=ToolRisk.READ)
-async def list_schemas(instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_list_schemas(instance: str | None = None) -> dict[str, Any]:
     """List database schemas visible to the MCP account.
 
     Scenario: discover the schema layout before picking tables.
+    Not for listing tables within a schema; use gaussdb_list_tables for table
+    discovery, or gaussdb_describe_table for column details.
     """
     return await asyncio.to_thread(
         _query, "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name", (), instance
@@ -57,10 +59,14 @@ async def list_schemas(instance: str | None = None) -> dict[str, Any]:
 
 
 @guard(risk=ToolRisk.READ)
-async def list_tables(schema: str = "public", instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_list_tables(
+    schema: str = "public", instance: str | None = None
+) -> dict[str, Any]:
     """List tables and views in a schema.
 
     Scenario: find candidate tables for a query.
+    Not for listing schemas; use gaussdb_list_schemas for schema discovery.
+    Not for column details; use gaussdb_describe_table for column information.
 
     Args:
         schema: Schema name, default public.
@@ -76,10 +82,13 @@ async def list_tables(schema: str = "public", instance: str | None = None) -> di
 
 
 @guard(risk=ToolRisk.READ)
-async def describe_table(schema: str, table: str, instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_describe_table(
+    schema: str, table: str, instance: str | None = None
+) -> dict[str, Any]:
     """Describe columns of a table: name, type, nullability, default, comment.
 
     Scenario: understand column semantics before writing SQL.
+    Not for listing all tables; use gaussdb_list_tables to discover tables first.
 
     Args:
         schema: Schema name.

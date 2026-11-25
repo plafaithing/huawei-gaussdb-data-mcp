@@ -285,7 +285,7 @@ def classify_sql(sql: str, *, max_sql_chars: int = DEFAULT_MAX_SQL_CHARS) -> Sql
             _reject(
                 "FORBIDDEN_KEYWORD",
                 f"Keyword '{sorted(hit)[0]}' makes this statement non-read-only.",
-                hint="If it is a write statement, call execute_sql_write instead.",
+                hint="If it is a write statement, call gaussdb_execute_sql_write instead.",
             )
         return SqlClassification(ToolRisk.READ, first)
 

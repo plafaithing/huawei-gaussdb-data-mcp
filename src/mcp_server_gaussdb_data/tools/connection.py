@@ -1,4 +1,4 @@
-"""连接管理工具：连接健康检查与池状态（对应需求 is_database_connected /
+"""连接管理工具：连接健康检查与池状态（对应需求 gaussdb_is_database_connected /
 get_database_connection_info）。
 
 设计说明：das-only——连接经 DAS 通道执行（后端常驻 server 内部），
@@ -23,12 +23,13 @@ _SYSTEM_DATABASES = {"postgres", "template0", "template1", "templatea", "templat
 
 
 @guard(risk=ToolRisk.READ)
-async def is_database_connected(instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_is_database_connected(instance: str | None = None) -> dict[str, Any]:
     """Check whether a database connection can be established right now.
 
     Scenario: verify connectivity and credentials before running real queries.
     Executes SELECT 1 through the connection pool (proves the full path:
     credentials load, driver connect, session usable).
+    Not for running business queries; use gaussdb_execute_sql for data access.
 
     Returns: connected (true/false), plus pool and driver context for diagnosis.
     """
@@ -56,12 +57,14 @@ async def is_database_connected(instance: str | None = None) -> dict[str, Any]:
 
 
 @guard(risk=ToolRisk.READ)
-async def get_connection_info(instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_get_connection_info(instance: str | None = None) -> dict[str, Any]:
     """Report cached connection-pool state and non-sensitive connection context.
 
     Scenario: inspect how many pooled connections are idle, which driver is in
     use, and whether a credential rotation is pending — the password never
     leaves the credentials file (only a fingerprint hash is tracked).
+    Not for running queries; use gaussdb_execute_sql for data access, or
+    gaussdb_is_database_connected for a quick liveness probe.
     """
 
     def _info() -> dict[str, Any]:
@@ -82,14 +85,16 @@ async def get_connection_info(instance: str | None = None) -> dict[str, Any]:
 
 
 @guard(risk=ToolRisk.WRITE)
-async def register_das_connection(instance_id: str, username: str, password: str,
-                                  database_name: str | None = None) -> dict[str, Any]:
+async def gaussdb_register_das_connection(instance_id: str, username: str, password: str,
+                                          database_name: str | None = None) -> dict[str, Any]:
     """Register a DAS connection (RegisterDbUser, datastore_type=gaussdbv5) and persist
     the returned connection id into credentials.json (survey/07 §6/§8).
 
     Scenario: first-time setup per instance. Afterwards execute tools only need the
     instance id. The password is handed to DAS once; the execution path never uses it
     (it stays in the credentials file only if provided, for auto-register/self-heal).
+    Not for routine queries; this is a one-time setup action. Use gaussdb_execute_sql
+    and related tools for data operations after registration.
 
     Args:
         instance_id: GaussDB instance ID.
@@ -117,7 +122,7 @@ async def register_das_connection(instance_id: str, username: str, password: str
 
 
 @guard(risk=ToolRisk.READ)
-async def list_user_databases(instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_list_user_databases(instance: str | None = None) -> dict[str, Any]:
     """List non-system databases to guide first-time database selection.
 
     Scenario: after the first connection (which lands on the pg catalog database),
@@ -125,6 +130,8 @@ async def list_user_databases(instance: str | None = None) -> dict[str, Any]:
     in the credentials entry, hot-reloaded); if none, guide the user to create one
     via CREATE DATABASE (the das track auto-applies panelKey for it, survey/07).
     System databases (postgres/templates) are excluded.
+    Not for listing tables or schemas; use gaussdb_list_tables or gaussdb_list_schemas
+    for object discovery within a database.
     """
 
     def _list() -> dict[str, Any]:
@@ -148,7 +155,7 @@ async def list_user_databases(instance: str | None = None) -> dict[str, Any]:
         if not user_dbs:
             out["guidance"] = (
                 "No user database found. Create one first, e.g. "
-                "execute_sql_dangerous('CREATE DATABASE mydb'), then set 'dbname' "
+                "gaussdb_execute_sql_dangerous('CREATE DATABASE mydb'), then set 'dbname' "
                 "in the credentials entry (hot-reloaded) to switch."
             )
         else:

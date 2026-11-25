@@ -141,7 +141,7 @@ async def test_read_only_block_hint_names_project_env_var(monkeypatch):
     monkeypatch.setenv("GAUSSDB_DATA_MCP_READ_ONLY", "true")
     async with Client(build_sql_server()) as client:
         result = await client.call_tool(
-            "execute_sql_write", {"query": "DELETE FROM t WHERE id = 1"}
+            "gaussdb_execute_sql_write", {"query": "DELETE FROM t WHERE id = 1"}
         )
     envelope = json.loads(result.content[0].text)["error"]
     assert envelope["code"] == "MCP_READ_ONLY"

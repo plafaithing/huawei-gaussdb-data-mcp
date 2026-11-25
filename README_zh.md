@@ -48,8 +48,8 @@ uv run gaussdb-data-mcp -t streamable-http
 |---|---|
 | ak/sk | 华为云 AK/SK（管控面签名；DAS 接口与 IAM 自动查 project_id 均使用） |
 | region | 支持中文区域名（"北京四"→cn-north-4 自动映射） |
-| das_connection_id | DAS 连接 id。来源：DAS 控制台登录实例产生，或 `register_das_connection` 工具注册产生；**缺失时 das 轨自动注册**（需条目内有 user/password） |
-| dbname | 执行 SQL 的库。**已配置用户库则直接使用**；落在系统库（postgres 等）时首次调用 `list_user_databases` 获取选择/建库引导 |
+| das_connection_id | DAS 连接 id。来源：DAS 控制台登录实例产生，或 `gaussdb_register_das_connection` 工具注册产生；**缺失时 das 轨自动注册**（需条目内有 user/password） |
+| dbname | 执行 SQL 的库。**已配置用户库则直接使用**；落在系统库（postgres 等）时首次调用 `gaussdb_list_user_databases` 获取选择/建库引导 |
 | schema | 默认 `public`（业务表/业务 DDL/DML 所在 schema，可自定义业务 schema） |
 | user/password | 连接未激活时自动 `retry_login`（带密码——实测唯一可靠激活方式）；建议保留以启用全自动自愈 |
 
@@ -70,12 +70,12 @@ uv run gaussdb-data-mcp -t streamable-http
 ## 4. 首次使用流程
 
 ```text
-1) list_user_databases
+1) gaussdb_list_user_databases
    ├─ status=ready（dbname 已是用户库）→ 直接执行 SQL
    ├─ status=guidance_needed + user_databases 非空
    │    → 从清单选择，把 dbname 改为目标库（热轮换即生效）
    └─ status=guidance_needed + 无用户库
-        → execute_sql_dangerous("CREATE DATABASE mydb")   ← 自动带 panelKey，verified 确认建成
+        → gaussdb_execute_sql_dangerous("CREATE DATABASE mydb")   ← 自动带 panelKey，verified 确认建成
         → dbname 改为 mydb
 2) 之后一切操作（读写/建表/DML/Oracle 语法）都在该用户库执行
    —— 表/业务对象落在库的 public（或自定义）schema；CREATE/DROP DATABASE 由系统自动处理，无需关心 schema
@@ -87,14 +87,14 @@ uv run gaussdb-data-mcp -t streamable-http
 
 | 工具 | 通道 | 用途 |
 |---|---|---|
-| `execute_sql` | READ | 单条只读 SQL（SELECT/SHOW/EXPLAIN/TABLE/WITH…SELECT） |
-| `execute_sql_write` | WRITE | 单条 DML（INSERT/UPDATE/DELETE/MERGE） |
-| `execute_sql_dangerous` | DANGEROUS | 单条 DDL（确认信封 + `ENABLE_DDL=true`；建库自动带 panelKey 并返回 verified） |
-| `explain_sql` | READ | SELECT 类语句的执行计划 |
-| `list_schemas` / `list_tables` / `describe_table` | READ | schema/表/列浏览（describe 含列注释） |
-| `is_database_connected` / `get_connection_info` | READ | 探活（SELECT 1）/ 池与凭证状态 |
-| `list_user_databases` | READ | 用户库清单 + 兼容模式 + 引导（status=ready/guidance_needed） |
-| `register_das_connection` | WRITE | 注册 DAS 连接（RegisterDbUser）并写回 credentials——首次接入用 |
+| `gaussdb_execute_sql` | READ | 单条只读 SQL（SELECT/SHOW/EXPLAIN/TABLE/WITH…SELECT） |
+| `gaussdb_execute_sql_write` | WRITE | 单条 DML（INSERT/UPDATE/DELETE/MERGE） |
+| `gaussdb_execute_sql_dangerous` | DANGEROUS | 单条 DDL（确认信封 + `ENABLE_DDL=true`；建库自动带 panelKey 并返回 verified） |
+| `gaussdb_explain_sql` | READ | SELECT 类语句的执行计划 |
+| `gaussdb_list_schemas` / `gaussdb_list_tables` / `gaussdb_describe_table` | READ | schema/表/列浏览（describe 含列注释） |
+| `gaussdb_is_database_connected` / `gaussdb_get_connection_info` | READ | 探活（SELECT 1）/ 池与凭证状态 |
+| `gaussdb_list_user_databases` | READ | 用户库清单 + 兼容模式 + 引导（status=ready/guidance_needed） |
+| `gaussdb_register_das_connection` | WRITE | 注册 DAS 连接（RegisterDbUser）并写回 credentials——首次接入用 |
 
 每次调用恰好执行一条语句；多语句、UTILITY、危险函数默认拒绝。CREATE/DROP DATABASE 的响应含 `verified` 字段（自动查 pg_database 确认生效——DAS 侧"受理成功"不等于实际执行）。
 

@@ -286,26 +286,50 @@ class DasBackend:
     def _check_sql_error(result: dict[str, Any]) -> None:
         """DAS 把 SQL 执行错误吞进 errorMessage 且 errorCodeStr/executeStatus 仍为
         成功态（实测："CREATE DATABASE cannot be executed in a transaction block."）
-        ——errorMessage 非空即视为执行失败，fail-fast。"""
-        err = result.get("errorMessage")
-        if err:
-            raise _die("GAUSSDB_DATA_MCP_SQL_ERROR", f"DAS SQL error: {err}")
+        ——errorMessage 非空即视为执行失败，fail-fast。
+
+        密码错误类（用户改密后保存密码失效）：独立错误码 GAUSSDB_DATA_MCP_DAS_AUTH_FAILED，
+        明确爆给用户"账号密码错误，可能密码已更换"（研发 2026-11-25 规格）。"""
+        err = result.get("errorMessage") or ""
+        if not err:
+            return
+        low = err.lower()
+        if ("password" in low or "密码" in err or "authentication" in low
+                or "login denied" in low) and "logout" not in low:
+            raise _die(
+                "GAUSSDB_DATA_MCP_DAS_AUTH_FAILED",
+                f"账号密码错误，可能密码已更换：{err[:200]}",
+                hint="Update 'password' in the credentials entry (and remove/reset the "
+                     "'activated' flag), then retry.",
+            )
+        raise _die("GAUSSDB_DATA_MCP_SQL_ERROR", f"DAS SQL error: {err}")
 
     def _relogin(self, creds: DbCredentials, http: _DasHttp, conn: str) -> None:
-        """会话自愈：**有密码时优先 retry_login（带密码，实测唯一可靠的激活方式）**；
-        username-only login 200 空体不可信（实测无法真正激活）。password 为空才降级
-        username-only（尽力而为），失败由上层空壳检测兜底报错。"""
+        """会话自愈入口（研发 2026-11-25 规格）：
+        - 未激活（首连/改密后）：retry_login 带真实密码并保存（is_save_password=true）
+        - 已激活（activated=true，登录缓存约 1 小时失效）：**免密重登**（password=null，
+          后端取之前保存的密码）
+        错误分类见 _check_sql_error：logout 类免密重登可解；密码错误类必须爆给用户。"""
+        if creds.das_activated:
+            self._relogin_saved(creds, http, conn)
+        else:
+            self._relogin_with_password(creds, http, conn)
+
+    def _relogin_with_password(self, creds: DbCredentials, http: _DasHttp, conn: str) -> None:
         with self._lock:
-            if creds.password:
-                http.post(
-                    _LOGIN_PATH.format(project=self._project(creds), conn=conn),
-                    {"retry_login": {"username": creds.user, "password": creds.password,
-                                     "is_save_password": True}},
-                )
-                return
             http.post(
                 _LOGIN_PATH.format(project=self._project(creds), conn=conn),
-                {"login": {"username": creds.user}},
+                {"databaseName": creds.dbname, "isChangePassword": False,
+                 "isSavePassword": True, "password": creds.password,
+                 "username": creds.user},
+            )
+
+    def _relogin_saved(self, creds: DbCredentials, http: _DasHttp, conn: str) -> None:
+        with self._lock:
+            http.post(
+                _LOGIN_PATH.format(project=self._project(creds), conn=conn),
+                {"databaseName": creds.dbname, "isChangePassword": False,
+                 "isSavePassword": True, "password": None, "username": creds.user},
             )
 
 

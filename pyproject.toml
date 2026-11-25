@@ -32,19 +32,13 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
 ]
-# 仅本地容器开发轨（README §2.4）：开源 psycopg2-binary 连本地 GaussDB 容器，
-# 云上实例仍须官方自研驱动（Linux/py311）。uv sync --group local 安装，不进主依赖。
-local = ["psycopg2-binary"]
-# Windows 原生开发/部署轨（README §2.5）：pyodbc + GaussDB ODBC Driver（gsqlodbc）
-# 连云上实例；不进主依赖——Linux 生产轨仍是官方自研 psycopg2。uv sync --group windows 安装。
-windows = ["pyodbc>=5.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "--cov=src --cov-report=term-missing --cov-fail-under=80"
-markers = ["live: needs a real GaussDB instance and the official driver (Linux/py3.11)"]
+
 
 [tool.ruff]
 line-length = 100
@@ -67,9 +61,4 @@ untyped_calls_exclude = ["sqlparse"]
 # sqlparse ships without type stubs (data-plane SQL classifier dependency).
 [[tool.mypy.overrides]]
 module = ["sqlparse.*"]
-ignore_missing_imports = true
-
-# Optional DB driver backends are lazy imports outside the main dependency set.
-[[tool.mypy.overrides]]
-module = ["psycopg2.*", "pyodbc.*"]
 ignore_missing_imports = true

@@ -19,7 +19,7 @@ from ..credentials import DbCredentials
 from ..das import get_das_backend, _cursor
 from ..sql_guard import SqlClassification, classify_sql
 
-_POOL: ConnectionPool | None = None
+_POOL: Any | None = None  # DasBackend（das-only）
 _POOL_LOCK = threading.Lock()
 
 

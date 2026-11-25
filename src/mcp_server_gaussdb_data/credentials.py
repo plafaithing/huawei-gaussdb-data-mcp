@@ -2,9 +2,6 @@
 
 - 每次工具调用都重新读文件（原子替换即可轮换，无需重启）。
 - 文件必须 0600（Windows 跳过权限位检查，与 core 一致）。
-- port 无默认值：GaussDB CN 端口必须显式配置（驱动默认 5432 是错的）。
-- verify-ca/verify-full 且未显式配 sslrootcert → 自动探测约定路径的 cacert.pem
-  （credentials.json 同目录；无凭证文件时当前工作目录），找不到即拒绝。
 """
 
 import hashlib

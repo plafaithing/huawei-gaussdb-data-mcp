@@ -126,7 +126,7 @@ def _cursor(conn: Any) -> Iterator[Any]:
 
 
 class DasBackend:
-    """与 ConnectionPool 同接口的 DAS 后端：read_connection/run_write/free_count。"""
+    """DAS 后端（das-only 唯一后端）：read_connection/run_write/free_count 接口。"""
 
     def __init__(self, settings: Any) -> None:
         self._settings = settings

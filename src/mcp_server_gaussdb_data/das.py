@@ -35,6 +35,7 @@ _RESULT_PATH = "/v3/{project}/connections/{conn}/get-execute-result-without-key"
 _LOGIN_PATH = "/v3/{project}/connections/{conn}/login-actions"
 _REGISTER_PATH = "/v3/{project}/instances/{iid}/db-users"
 _REGISTER_DATASTORE = "gaussdbv5"
+_LIST_DB_USERS_PATH = "/v3/{project}/instances/{iid}/db-users"
 _IAM_HOST = "iam.myhuaweicloud.com"
 _TIMEOUT = 30
 # 跨库 DDL 语句识别（大小写不敏感）：此类语句必须携带 panelKey（survey/07 实测）
@@ -177,6 +178,38 @@ class DasBackend:
             )
         return uid
 
+    def _find_db_user(self, creds: DbCredentials, instance_id: str) -> str | None:
+        """ListDbUsers 查重（用户 2026-11-09 安全决策）：按 username 匹配已有连接 id。"""
+        resp = self._http(creds).get(
+            self._http(creds)._host,
+            _LIST_DB_USERS_PATH.format(project=self._project(creds), iid=instance_id),
+            [("offset", "0"), ("limit", "100")],
+        )
+        for u in resp.get("db_users") or []:
+            if u.get("db_username") == creds.user:
+                return u.get("db_user_id")
+        return None
+
+    def _ensure_connection(self, creds: DbCredentials, settings: Any) -> DbCredentials:
+        """connection_id 缺失（survey/07 §8 流程）：ListDbUsers 查重 → 有则用；
+        无则 RegisterDbUser 创建（gaussdbv5 + database_name）→ 原子写回 credentials。"""
+        if not (creds.instance_id and creds.user and creds.password):
+            raise _die(
+                "GAUSSDB_DATA_MCP_DAS_NO_CONNECTION",
+                "das driver requires das_connection_id; auto-register needs "
+                "instance_id/user/password in the instance entry.",
+            )
+        existing = self._find_db_user(creds, creds.instance_id)
+        if existing:
+            new_id = existing  # 查重命中：直接使用，不重复注册
+        else:
+            new_id = self.register_db_user(creds, creds.instance_id)
+        if settings.credentials_file:
+            from .credentials import save_das_connection
+            save_das_connection(settings.credentials_file, creds.instance_id,
+                                new_id, creds.dbname or None)
+        return replace(creds, das_connection_id=new_id)
+
     def execute(self, creds: DbCredentials, settings: Any, sql: str) -> dict[str, Any]:
         """两步异步：执行受理 → 立即取结果。返回原始驼峰响应 dict。
 
@@ -187,13 +220,8 @@ class DasBackend:
             raise _die("GAUSSDB_DATA_MCP_DAS_NO_DATABASE", "das driver requires database_name.")
         conn = creds.das_connection_id
         if not conn:
-            raise _die(
-                "GAUSSDB_DATA_MCP_DAS_NO_CONNECTION",
-                "das driver requires das_connection_id (from DAS console login).",
-                hint="Log into the instance in the DAS console, then set das_connection_id "
-                     "in the credentials entry. Registration-based connections are not the "
-                     "primary path (user 2026-11-09 decision).",
-            )
+            creds = self._ensure_connection(creds, settings)  # 查重→注册→写回（survey/07 §8）
+            conn = creds.das_connection_id
         http = self._http(creds)
         # 会话生命周期（2026-11-20 实测）：login 激活一次后会话持续有效（小时级）。
         # 首连保护：未激活过的连接直接 execute 会在服务端挂死并堵死该连接队列

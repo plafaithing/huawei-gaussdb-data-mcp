@@ -246,3 +246,28 @@ def test_list_user_databases_status_ready(monkeypatch, tmp_path):
         'read_connection': staticmethod(lambda c, settings: _Conn())})())
     r = asyncio.run(conn_tools.list_user_databases())
     assert r['status'] == 'ready' and r['user_databases'] == ['test'] and 'guidance' not in r
+
+
+def test_ensure_connection_dedup_then_register(tmp_path, monkeypatch):
+    # 无 connection_id：ListDbUsers 查重命中 → 直接用，不注册
+    import json as _json
+    cred = tmp_path / 'cred.json'
+    cred.write_text(_json.dumps({'ak': 'A', 'sk': 'S', 'region': 'cn-north-4',
+        'default_instance': 'i1',
+        'instances': {'i1': {'dbname': 'test', 'user': 'root', 'password': 'p'}}}), encoding='utf-8')
+    from mcp_server_gaussdb_data.config import DataMcpSettings
+    monkeypatch.setenv('GAUSSDB_DATA_MCP_DRIVER', 'das')
+    monkeypatch.setenv('GAUSSDB_DATA_MCP_CREDENTIALS_FILE', str(cred))
+    s = DataMcpSettings.from_env()
+    b = _backend(_FakeHttp([
+        {'success': True, 'executeId': 'e1'},
+        dict(_RAW_RESULT),
+    ]))
+    b._find_db_user = lambda c, iid: 'found-1'
+    r = b.execute(DbCredentials(host='', port=0, dbname='test', user='root', password='p',
+                                das_ak='A', das_sk='S', das_region='cn-north-4',
+                                das_project_id='proj', instance_id='i1'), s, 'SELECT 1')
+    assert r.get('rows') == 2
+    # 查重命中后 connection_id 应写回 credentials 文件
+    data = _json.load(open(str(cred), encoding='utf-8'))
+    assert data['instances']['i1']['das_connection_id'] == 'found-1'

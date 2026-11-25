@@ -36,7 +36,7 @@ uv run mcp_server_gaussdb_data -t streamable-http
     "<instance_id>": {
       "das_connection_id": "<DAS connection id>",
       "dbname": "mydb",
-      "schema": "dbe_alert",
+      "schema": "public",
       "user": "mcp_ro",
       "password": "..."
     }
@@ -50,7 +50,7 @@ uv run mcp_server_gaussdb_data -t streamable-http
 | region | Localized names supported ("北京四" → cn-north-4 auto-mapped) |
 | das_connection_id | DAS connection id. Source: created when logging into the instance from the DAS console, or produced by the `register_das_connection` tool; **auto-registered when missing** (needs user/password in the entry; RegisterDbUser requires the newer server build) |
 | dbname | Database where SQL runs. **If already a user database it is used directly**; when it lands on a system database (postgres etc.) call `list_user_databases` once for selection/creation guidance |
-| schema | Default `dbe_alert` (cross-database DDL only takes effect under this schema — verified constraint) |
+| schema | Default `public` (where business tables/DDL/DML live; use your own business schema if needed). CREATE/DROP DATABASE is routed to the system schema automatically |
 | user/password | Auto `retry_login` (with password — the only reliably verified activation form) when the connection is stale; keep it for fully automatic self-healing |
 
 `project_id` needs no configuration (queried from IAM and cached). Multi-instance: several entries under `instances` with `default_instance`; every execution tool accepts an optional `instance` parameter.
@@ -78,6 +78,7 @@ uv run mcp_server_gaussdb_data -t streamable-http
         → execute_sql_dangerous("CREATE DATABASE mydb")   ← panelKey auto-applied, verified confirms
         → set dbname to mydb
 2) All further operations (read/write/DDL/DML/Oracle syntax) run in that user database
+   — tables and business objects live in the database's public (or custom) schema; CREATE/DROP DATABASE is routed automatically, no schema concern
 ```
 
 System databases (postgres/template*) are only for catalog queries and database creation — **never** create business tables there (pg-database DDL hangs).

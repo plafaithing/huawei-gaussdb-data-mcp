@@ -36,7 +36,7 @@ uv run gaussdb-data-mcp -t streamable-http
     "<instance_id>": {
       "das_connection_id": "<DAS 连接 id>",
       "dbname": "mydb",
-      "schema": "dbe_alert",
+      "schema": "public",
       "user": "mcp_ro",
       "password": "..."
     }
@@ -50,7 +50,7 @@ uv run gaussdb-data-mcp -t streamable-http
 | region | 支持中文区域名（"北京四"→cn-north-4 自动映射） |
 | das_connection_id | DAS 连接 id。来源：DAS 控制台登录实例产生，或 `register_das_connection` 工具注册产生；**缺失时 das 轨自动注册**（需条目内有 user/password） |
 | dbname | 执行 SQL 的库。**已配置用户库则直接使用**；落在系统库（postgres 等）时首次调用 `list_user_databases` 获取选择/建库引导 |
-| schema | 默认 `dbe_alert`（跨库 DDL 仅在此 schema 下生效，实测约束） |
+| schema | 默认 `public`（业务表/业务 DDL/DML 所在 schema，可自定义业务 schema） |
 | user/password | 连接未激活时自动 `retry_login`（带密码——实测唯一可靠激活方式）；建议保留以启用全自动自愈 |
 
 `project_id` 免配置（IAM `/v3/projects` 自动查询并缓存）。多实例：`instances` 下多个条目，`default_instance` 指定默认；所有执行工具有可选 `instance` 参数。
@@ -78,6 +78,7 @@ uv run gaussdb-data-mcp -t streamable-http
         → execute_sql_dangerous("CREATE DATABASE mydb")   ← 自动带 panelKey，verified 确认建成
         → dbname 改为 mydb
 2) 之后一切操作（读写/建表/DML/Oracle 语法）都在该用户库执行
+   —— 表/业务对象落在库的 public（或自定义）schema；CREATE/DROP DATABASE 由系统自动处理，无需关心 schema
 ```
 
 系统库（postgres/template*）只用于查系统目录与建库，**不要**在其中建业务表（pg 库 DDL 会挂死）。

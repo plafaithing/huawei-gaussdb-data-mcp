@@ -196,7 +196,7 @@ def test_swallowed_sql_error_fails_fast():
                        'errorMessage': 'ERROR: CREATE DATABASE cannot be executed in a transaction block.',
                        'rows': 0, 'executeStatus': 'finished'}])
     b = _backend(http)
-    with __import__('pytest').raises(Exception, match='transaction block'):
+    with pytest.raises(Exception, match='transaction block'):
         das_mod.DasCursor(b, _creds(), _settings()).execute('CREATE DATABASE x')
 
 
@@ -227,7 +227,6 @@ def test_gaussdb_list_user_databases_status_ready(monkeypatch, tmp_path):
     monkeypatch.setenv('GAUSSDB_DATA_MCP_DRIVER', 'das')
     monkeypatch.setenv('GAUSSDB_DATA_MCP_CREDENTIALS_FILE', str(cred))
     from mcp_server_gaussdb_data.tools import connection as conn_tools
-    from mcp_server_gaussdb_data.config import DataMcpSettings
     s = DataMcpSettings.from_env()
     # 模拟查询结果
     class _Cur:
@@ -253,7 +252,6 @@ def test_ensure_connection_dedup_then_register(tmp_path, monkeypatch):
     cred.write_text(_json.dumps({'ak': 'A', 'sk': 'S', 'region': 'cn-north-4',
         'default_instance': 'i1',
         'instances': {'i1': {'dbname': 'test', 'user': 'root', 'password': 'p'}}}), encoding='utf-8')
-    from mcp_server_gaussdb_data.config import DataMcpSettings
     monkeypatch.setenv('GAUSSDB_DATA_MCP_DRIVER', 'das')
     monkeypatch.setenv('GAUSSDB_DATA_MCP_CREDENTIALS_FILE', str(cred))
     s = DataMcpSettings.from_env()
@@ -267,5 +265,6 @@ def test_ensure_connection_dedup_then_register(tmp_path, monkeypatch):
                                 das_project_id='proj', instance_id='i1'), s, 'SELECT 1')
     assert r.get('rows') == 2
     # 查重命中后 connection_id 应写回 credentials 文件
-    data = _json.load(open(str(cred), encoding='utf-8'))
+    with open(str(cred), encoding='utf-8') as f:
+        data = _json.load(f)
     assert data['instances']['i1']['das_connection_id'] == 'found-1'

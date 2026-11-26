@@ -16,6 +16,7 @@ EMPTY / NUL_BYTE / TOO_LONG / MULTI_STATEMENT / NOT_WHITELISTED / FORBIDDEN_KEYW
 """
 
 from dataclasses import dataclass
+from typing import NoReturn
 
 import sqlparse
 from huaweicloud_mcp_core import ToolRisk
@@ -69,7 +70,7 @@ class SqlClassification:
     kind: str  # 首关键词（大写），供审计与结果展示
 
 
-def _reject(code: str, message: str, hint: str | None = None) -> None:
+def _reject(code: str, message: str, hint: str | None = None) -> NoReturn:
     raise McpToolError(f"GAUSSDB_DATA_MCP_{code}", message, hint=hint)
 
 

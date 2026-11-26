@@ -125,10 +125,12 @@ def _identifier_value(token: sqlparse.sql.Token) -> str | None:
     """
     if token.ttype is None:
         return None
+    # sqlparse 无类型 stub，Token.value 对 mypy 是 Any（运行时恒为 str）；显式收窄
+    value: str = token.value
     if token.ttype in sqlparse.tokens.Name:
-        return token.value.strip('`"').upper()
+        return value.strip('`"').upper()
     if token.ttype in sqlparse.tokens.String.Symbol:
-        return token.value.strip('"`').upper()
+        return value.strip('"`').upper()
     return None
 
 

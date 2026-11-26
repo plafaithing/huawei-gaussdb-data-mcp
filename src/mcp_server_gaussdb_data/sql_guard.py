@@ -193,18 +193,16 @@ def _has_unicode_escape(tokens: list[sqlparse.sql.Token]) -> bool:
     return False
 
 
-def classify_sql(sql: str, *, max_sql_chars: int = DEFAULT_MAX_SQL_CHARS) -> SqlClassification:
-    if not isinstance(sql, str) or not sql.strip():
-        _reject("EMPTY", "The SQL statement is empty.")
-    if "\x00" in sql:
-        _reject("NUL_BYTE", "SQL must not contain NUL bytes (GaussDB driver limitation).")
-    if len(sql) > max_sql_chars:
-        _reject("TOO_LONG", f"SQL exceeds {max_sql_chars} characters.")
+def _sole_statement(
+    sql: str,
+) -> tuple[sqlparse.sql.Statement, list[sqlparse.sql.Token]]:
+    """parse + 语句边界检查 → (唯一有效 statement, 全量展平 token 流)。
 
-    statements = sqlparse.parse(sql)
-    # 语句终结分号之后还允许存在的只有空白；注释或其他任何 token 都视为多语句。
-    # 必须在过滤纯注释 statement 之前做：sqlparse 会把 ``SELECT 1; /* c */`` 的尾注释
-    # 切成第二个 statement，若先过滤再检查就会漏放。
+    语句终结分号之后还允许存在的只有空白；注释或其他任何 token 都视为多语句。
+    必须在过滤纯注释 statement 之前做：sqlparse 会把 ``SELECT 1; /* c */`` 的尾注释
+    切成第二个 statement，若先过滤再检查就会漏放。
+    """
+    statements = list(sqlparse.parse(sql))
     tokens = _statement_tokens(statements)
     seen_semicolon = False
     for token in tokens:
@@ -224,21 +222,20 @@ def classify_sql(sql: str, *, max_sql_chars: int = DEFAULT_MAX_SQL_CHARS) -> Sql
             f"Expected exactly one statement, got {len(statements)}.",
             hint="Execute statements one at a time.",
         )
-    statement = statements[0]
+    return statements[0], tokens
 
-    first = _first_keyword(statement)
-    if first is None:
-        _reject("EMPTY", "The SQL statement is empty.")
-    keywords = _keyword_tokens(tokens)
 
-    # 终审：U& Unicode 转义可编码任意标识符/字符串，归一化无法穷举——任何通道直接拒绝
+def _reject_any_channel(tokens: list[sqlparse.sql.Token]) -> None:
+    """任何通道共有的拒绝检查。
+
+    终审：U& Unicode 转义可编码任意标识符/字符串，归一化无法穷举——直接拒绝。
+    survey/05：敏感会话变量任何通道拒绝（含 DDL——防 ALTER ... SET 关完整性控制）。
+    """
     if _has_unicode_escape(tokens):
         _reject(
             "FORBIDDEN_KEYWORD",
             "Unicode-escaped identifiers (U&\"...\") are not supported.",
         )
-
-    # survey/05：敏感会话变量任何通道拒绝（含 DDL——防 ALTER ... SET 关完整性控制）
     var_hit = _name_tokens(tokens) & _SENSITIVE_SESSION_VARS
     if var_hit:
         _reject(
@@ -246,6 +243,27 @@ def classify_sql(sql: str, *, max_sql_chars: int = DEFAULT_MAX_SQL_CHARS) -> Sql
             f"Session variable '{sorted(var_hit)[0]}' controls integrity or security "
             "and cannot be set through this server.",
         )
+
+
+def _classify_with(keywords: set[str]) -> SqlClassification:
+    """WITH 首关键词的子句分类：UTILITY 拒绝，再按首个出现的 DML/DDL 关键字定通道。"""
+    if keywords & _UTILITY_KEYWORDS:
+        _reject(
+            "FORBIDDEN_KEYWORD",
+            f"Keyword '{sorted(keywords & _UTILITY_KEYWORDS)[0]}' is not allowed.",
+        )
+    if keywords & _DDL_FIRST:
+        return SqlClassification(ToolRisk.DANGEROUS, "WITH")
+    if keywords & _WRITE_FIRST:
+        return SqlClassification(ToolRisk.WRITE, "WITH")
+    return SqlClassification(ToolRisk.READ, "WITH")
+
+
+def _classify_statement(
+    first: str, keywords: set[str], tokens: list[sqlparse.sql.Token]
+) -> SqlClassification:
+    """首关键词判定之后的通道分类（含全部扫描层拒绝）。"""
+    _reject_any_channel(tokens)
 
     if first in _DDL_FIRST:
         return SqlClassification(ToolRisk.DANGEROUS, first)
@@ -269,16 +287,7 @@ def classify_sql(sql: str, *, max_sql_chars: int = DEFAULT_MAX_SQL_CHARS) -> Sql
         return SqlClassification(ToolRisk.WRITE, first)
 
     if first == "WITH":
-        if keywords & _UTILITY_KEYWORDS:
-            _reject(
-                "FORBIDDEN_KEYWORD",
-                f"Keyword '{sorted(keywords & _UTILITY_KEYWORDS)[0]}' is not allowed.",
-            )
-        if keywords & _DDL_FIRST:
-            return SqlClassification(ToolRisk.DANGEROUS, "WITH")
-        if keywords & _WRITE_FIRST:
-            return SqlClassification(ToolRisk.WRITE, "WITH")
-        return SqlClassification(ToolRisk.READ, "WITH")
+        return _classify_with(keywords)
 
     if first in _READ_FIRST:
         hit = keywords & _SCAN_FOR_READ
@@ -295,3 +304,18 @@ def classify_sql(sql: str, *, max_sql_chars: int = DEFAULT_MAX_SQL_CHARS) -> Sql
         f"Statement type '{first}' is not whitelisted.",
         hint="Allowed: SELECT / VALUES / SHOW / EXPLAIN / TABLE / WITH (+ write tools).",
     )
+
+
+def classify_sql(sql: str, *, max_sql_chars: int = DEFAULT_MAX_SQL_CHARS) -> SqlClassification:
+    if not isinstance(sql, str) or not sql.strip():
+        _reject("EMPTY", "The SQL statement is empty.")
+    if "\x00" in sql:
+        _reject("NUL_BYTE", "SQL must not contain NUL bytes (GaussDB driver limitation).")
+    if len(sql) > max_sql_chars:
+        _reject("TOO_LONG", f"SQL exceeds {max_sql_chars} characters.")
+
+    statement, tokens = _sole_statement(sql)
+    first = _first_keyword(statement)
+    if first is None:
+        _reject("EMPTY", "The SQL statement is empty.")
+    return _classify_statement(first, _keyword_tokens(tokens), tokens)

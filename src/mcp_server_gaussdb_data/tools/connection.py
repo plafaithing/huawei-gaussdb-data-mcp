@@ -7,12 +7,10 @@ get_database_connection_info）。
 """
 
 import asyncio
+from dataclasses import replace as _dc_replace
 from typing import Any
 
-from dataclasses import replace as _dc_replace
-
 from huaweicloud_mcp_core import ToolRisk, guard
-from huaweicloud_mcp_core.errors import McpToolError
 
 from ..credentials import DbCredentials
 from ..das import _cursor
@@ -44,10 +42,9 @@ async def gaussdb_is_database_connected(instance: str | None = None) -> dict[str
             "pool_free": pool.free_count(),
         }
         try:
-            with pool.read_connection(creds, settings=settings) as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-                    cur.fetchone()
+            with pool.read_connection(creds, settings=settings) as conn, conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
             state["connected"] = True
         except Exception as exc:  # 连接失败是有效返回值而非工具异常
             state["error"] = type(exc).__name__
@@ -137,10 +134,12 @@ async def gaussdb_list_user_databases(instance: str | None = None) -> dict[str, 
     def _list() -> dict[str, Any]:
         settings = _settings()
         creds = DbCredentials.load(settings, instance)
-        with _pool(settings).read_connection(creds, settings=settings) as conn:
-            with _cursor(conn) as cur:
-                cur.execute("SELECT datname, datcompatibility FROM pg_database ORDER BY datname")
-                all_dbs = [(row[0], row[1]) for row in cur.fetchall()]
+        with (
+            _pool(settings).read_connection(creds, settings=settings) as conn,
+            _cursor(conn) as cur,
+        ):
+            cur.execute("SELECT datname, datcompatibility FROM pg_database ORDER BY datname")
+            all_dbs = [(row[0], row[1]) for row in cur.fetchall()]
         user_dbs = [d for d in all_dbs if d[0] not in _SYSTEM_DATABASES]
         out: dict[str, Any] = {
             "current_database": creds.dbname,

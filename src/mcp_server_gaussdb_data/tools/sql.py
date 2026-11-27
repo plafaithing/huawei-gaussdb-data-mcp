@@ -16,7 +16,7 @@ from huaweicloud_mcp_core.errors import McpToolError
 
 from ..config import DataMcpSettings
 from ..credentials import DbCredentials
-from ..das import get_das_backend, _cursor
+from ..das import _cursor, get_das_backend
 from ..sql_guard import SqlClassification, classify_sql
 
 _POOL: Any | None = None  # DasBackend（das-only）
@@ -102,12 +102,14 @@ def _run_channel(query: str, channel: ToolRisk, instance: str | None = None) -> 
     creds = DbCredentials.load(settings, instance)
     try:
         if channel is ToolRisk.READ:
-            with _pool(settings).read_connection(creds, settings=settings) as conn:
-                with _cursor(conn) as cur:
-                    cur.execute(query)
-                    if cur.description is None:
-                        return {"columns": [], "row_count": 0, "rows": [], "truncated": False}
-                    return _format_rows(cur, settings)
+            with (
+                _pool(settings).read_connection(creds, settings=settings) as conn,
+                _cursor(conn) as cur,
+            ):
+                cur.execute(query)
+                if cur.description is None:
+                    return {"columns": [], "row_count": 0, "rows": [], "truncated": False}
+                return _format_rows(cur, settings)
         affected = _pool(settings).run_write(creds, settings=settings, sql=query)
     except McpToolError:
         raise
@@ -129,16 +131,17 @@ _DB_DDL_RE = re.compile(
 )
 
 
-def _das_verify_database(creds: DbCredentials, settings: DataMcpSettings, query: str) -> bool | None:
+def _das_verify_database(
+    creds: DbCredentials, settings: DataMcpSettings, query: str
+) -> bool | None:
     """CREATE/DROP DATABASE 后查 pg_database 确认生效；其他 DDL 返回 None（不验证）。"""
     m = _DB_DDL_RE.match(query)
     if not m:
         return None
     action, name = m.group(1).upper(), m.group(2)
-    with _pool(settings).read_connection(creds, settings=settings) as conn:
-        with _cursor(conn) as cur:
-            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
-            exists = cur.fetchone() is not None
+    with _pool(settings).read_connection(creds, settings=settings) as conn, _cursor(conn) as cur:
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
+        exists = cur.fetchone() is not None
     if action == "CREATE":
         return exists
     if action == "DROP":
@@ -163,7 +166,9 @@ async def gaussdb_execute_sql(query: str, instance: str | None = None) -> dict[s
 
 
 @guard(risk=ToolRisk.WRITE)
-async def gaussdb_execute_sql_write(query: str, confirm: bool = False, instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_execute_sql_write(
+    query: str, confirm: bool = False, instance: str | None = None
+) -> dict[str, Any]:
     """Execute one data-modifying statement (INSERT / UPDATE / DELETE / MERGE).
 
     Scenario: apply data changes the user explicitly asked for. Requires
@@ -179,7 +184,9 @@ async def gaussdb_execute_sql_write(query: str, confirm: bool = False, instance:
 
 
 @guard(risk=ToolRisk.DANGEROUS)
-async def gaussdb_execute_sql_dangerous(query: str, confirm: bool = False, instance: str | None = None) -> dict[str, Any]:
+async def gaussdb_execute_sql_dangerous(
+    query: str, confirm: bool = False, instance: str | None = None
+) -> dict[str, Any]:
     """Execute one DDL statement (CREATE / ALTER / DROP / TRUNCATE / GRANT ...).
 
     Scenario: schema changes requested explicitly by the user. Requires
@@ -219,10 +226,12 @@ def _run_explain(query: str, instance: str | None = None) -> dict[str, Any]:
         )
     creds = DbCredentials.load(settings, instance)
     try:
-        with _pool(settings).read_connection(creds, settings=settings) as conn:
-            with _cursor(conn) as cur:
-                cur.execute(f"EXPLAIN {query}")
-                return _format_rows(cur, settings)
+        with (
+            _pool(settings).read_connection(creds, settings=settings) as conn,
+            _cursor(conn) as cur,
+        ):
+            cur.execute(f"EXPLAIN {query}")
+            return _format_rows(cur, settings)
     except McpToolError:
         raise
     except Exception as exc:

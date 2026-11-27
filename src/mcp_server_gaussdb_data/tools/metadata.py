@@ -31,14 +31,16 @@ def _validate_identifier(value: str, name: str) -> str:
     return value
 
 
-def _query(sql: str, params: tuple, instance: str | None = None) -> dict[str, Any]:
+def _query(sql: str, params: tuple[Any, ...], instance: str | None = None) -> dict[str, Any]:
     settings = _settings()
     creds = DbCredentials.load(settings, instance)
     try:
-        with _pool(settings).read_connection(creds, settings=settings) as conn:
-            with _cursor(conn) as cur:
-                cur.execute(sql, params)
-                return _format_rows(cur, settings)
+        with (
+            _pool(settings).read_connection(creds, settings=settings) as conn,
+            _cursor(conn) as cur,
+        ):
+            cur.execute(sql, params)
+            return _format_rows(cur, settings)
     except McpToolError:
         raise
     except Exception as exc:
@@ -54,7 +56,9 @@ async def gaussdb_list_schemas(instance: str | None = None) -> dict[str, Any]:
     discovery, or gaussdb_describe_table for column details.
     """
     return await asyncio.to_thread(
-        _query, "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name", (), instance
+        _query,
+        "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name",
+        (), instance,
     )
 
 

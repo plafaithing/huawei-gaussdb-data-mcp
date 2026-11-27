@@ -4,11 +4,13 @@
 - 文件必须 0600（Windows 跳过权限位检查，与 core 一致）。
 """
 
+import contextlib
 import hashlib
 import json
 import os
 import stat
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -75,7 +77,9 @@ class DbCredentials:
     das_activated: bool = False
 
     @classmethod
-    def _load_das(cls, pick, settings: DataMcpSettings, instance: str | None) -> "DbCredentials":
+    def _load_das(
+        cls, pick: Callable[[str, Any], Any], settings: DataMcpSettings, instance: str | None
+    ) -> "DbCredentials":
         """das 轨 v2：多实例映射（survey/07 §8）；兼容 v1 平铺结构。
 
         v2 结构：{ak, sk, region, default_instance, instances: {iid: {das_connection_id,
@@ -92,7 +96,10 @@ class DbCredentials:
         if instances:
             ak = pick("ak", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_AK")
             sk = pick("sk", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_SK")
-            region = normalize_region(pick("region", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_REGION")) or "cn-north-4"
+            region = (
+                normalize_region(pick("region", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_REGION"))
+                or "cn-north-4"
+            )
             iid = (instance or pick("default_instance", "") or "").strip()
             if not iid:
                 if len(instances) == 1:
@@ -100,7 +107,8 @@ class DbCredentials:
                 else:
                     raise McpToolError(
                         "MCP_CREDENTIAL_ERROR",
-                        "Multiple DAS instances configured; pass 'instance' or set default_instance.",
+                        "Multiple DAS instances configured; "
+                        "pass 'instance' or set default_instance.",
                         hint=f"Configured instances: {', '.join(sorted(instances))}.",
                     )
             entry = instances.get(iid)
@@ -110,9 +118,9 @@ class DbCredentials:
                     f"DAS instance '{iid}' is not configured.",
                     hint=f"Configured instances: {', '.join(sorted(instances))}.",
                 )
-            entry_pick = lambda k, default: (  # noqa: E731
-                str(entry[k]) if entry.get(k) is not None else default
-            )
+            def entry_pick(key: str, default: Any) -> Any:
+                value = entry.get(key)
+                return str(value) if value is not None else default
             creds = cls(
                 instance_id=iid,
                 dbname=entry_pick("dbname", "postgres"),
@@ -120,7 +128,8 @@ class DbCredentials:
                 password=entry_pick("password", ""),
                 das_connection_id=entry_pick("das_connection_id", ""),
                 das_ak=ak, das_sk=sk,
-                das_project_id=pick("project_id", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
+                das_project_id=pick("project_id", "")
+                or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
                 das_region=normalize_region(entry_pick("region", region)) or region,
                 das_schema=entry_pick("schema", "public"),
             das_host=entry_pick("das_host", ""),
@@ -135,8 +144,11 @@ class DbCredentials:
                 das_connection_id=pick("das_connection_id", "") or "",
                 das_ak=pick("ak", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_AK"),
                 das_sk=pick("sk", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_SK"),
-                das_project_id=pick("project_id", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
-                das_region=normalize_region(pick("region", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_REGION")) or "cn-north-4",
+                das_project_id=pick("project_id", "")
+                or env_or("GAUSSDB_DATA_MCP_CLOUD_PROJECT_ID"),
+                das_region=normalize_region(
+                    pick("region", "") or env_or("GAUSSDB_DATA_MCP_CLOUD_REGION")
+                ) or "cn-north-4",
                 das_schema=pick("schema", "") or "public",
                 das_host=pick("das_host", ""),
                 das_activated=bool(pick("activated", False)),
@@ -150,7 +162,8 @@ class DbCredentials:
             raise McpToolError(
                 "MCP_CREDENTIAL_ERROR",
                 f"Missing DAS credentials: {', '.join(missing)}.",
-                hint="Set ak/sk/region in the credentials file or GAUSSDB_DATA_MCP_CLOUD_* variables.",
+                hint="Set ak/sk/region in the credentials file "
+                "or GAUSSDB_DATA_MCP_CLOUD_* variables.",
             )
         canonical = json.dumps(
             {"conn": creds.das_connection_id, "project": creds.das_project_id,
@@ -203,10 +216,8 @@ def save_das_connection(path: str, instance_id: str, connection_id: str,
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 

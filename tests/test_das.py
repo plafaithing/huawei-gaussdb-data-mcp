@@ -3,8 +3,8 @@
 import pytest
 
 from mcp_server_gaussdb_data import das as das_mod
-from mcp_server_gaussdb_data.credentials import DbCredentials
 from mcp_server_gaussdb_data.config import DataMcpSettings
+from mcp_server_gaussdb_data.credentials import DbCredentials
 
 
 def _settings():
@@ -39,7 +39,10 @@ class _FakeHttp:
 _RAW_RESULT = {
     "rows": 2,
     "metadata": [{"label": "datname", "name": "COLUMN_1"}, {"label": "datdba", "name": "COLUMN_2"}],
-    "columnValues": [{"COLUMN_1": "postgres", "COLUMN_2": "10"}, {"COLUMN_1": "test", "COLUMN_2": "16750"}],
+    "columnValues": [
+        {"COLUMN_1": "postgres", "COLUMN_2": "10"},
+        {"COLUMN_1": "test", "COLUMN_2": "16750"},
+    ],
     "executeStatus": "finished", "timeDelay": 40, "sql": "SELECT 1",
 }
 
@@ -137,7 +140,8 @@ def test_blank_shell_self_heal():
     b = _backend(http)
     cur = das_mod.DasCursor(b, _creds(), _settings())
     cur.execute("SELECT 1")
-    assert http.calls[2][0].endswith("async-execute-sql-without-key")  # login 被 mock 吸收，重试受理在 calls[2]
+    # login 被 mock 吸收，重试受理在 calls[2]
+    assert http.calls[2][0].endswith("async-execute-sql-without-key")
     assert len(cur.fetchall()) == 2
 
 
@@ -147,14 +151,17 @@ def test_v2_multi_instance(tmp_path, monkeypatch):
     cred.write_text(_json.dumps({
         'ak': 'AKX', 'sk': 'SKX', 'region': '北京四', 'default_instance': 'inst-a',
         'instances': {
-            'inst-a': {'das_connection_id': 'conn-a', 'dbname': 'test', 'user': 'u', 'password': 'p'},
+            'inst-a': {'das_connection_id': 'conn-a', 'dbname': 'test',
+                       'user': 'u', 'password': 'p'},
             'inst-b': {'user': 'root', 'password': 'pw', 'dbname': 'postgres'},
         }}), encoding='utf-8')
     monkeypatch.setenv('GAUSSDB_DATA_MCP_DRIVER', 'das')
     monkeypatch.setenv('GAUSSDB_DATA_MCP_CREDENTIALS_FILE', str(cred))
     s = DataMcpSettings.from_env()
     a = DbCredentials.load(s)
-    assert (a.das_connection_id, a.das_region, a.dbname, a.instance_id) == ('conn-a', 'cn-north-4', 'test', 'inst-a')
+    assert (
+        a.das_connection_id, a.das_region, a.dbname, a.instance_id
+    ) == ('conn-a', 'cn-north-4', 'test', 'inst-a')
     b = DbCredentials.load(s, instance='inst-b')
     assert b.das_connection_id == '' and b.instance_id == 'inst-b' and b.user == 'root'
     try:
@@ -166,6 +173,7 @@ def test_v2_multi_instance(tmp_path, monkeypatch):
 
 def test_save_das_connection_roundtrip(tmp_path):
     import json as _json
+
     from mcp_server_gaussdb_data.credentials import save_das_connection
     p = tmp_path / 'cred.json'
     p.write_text('{"ak": "A", "instances": {}}', encoding='utf-8')
@@ -193,7 +201,8 @@ def test_swallowed_sql_error_fails_fast():
     # DAS 把 SQL 错误吞进 errorMessage 且状态层全成功——必须 fail-fast
     http = _FakeHttp([{'success': True, 'executeId': 'ea'},
                       {'errorCodeStr': '200',
-                       'errorMessage': 'ERROR: CREATE DATABASE cannot be executed in a transaction block.',
+                       'errorMessage': 'ERROR: CREATE DATABASE cannot be executed '
+                                       'in a transaction block.',
                        'rows': 0, 'executeStatus': 'finished'}])
     b = _backend(http)
     with pytest.raises(Exception, match='transaction block'):
@@ -223,11 +232,11 @@ def test_gaussdb_list_user_databases_status_ready(monkeypatch, tmp_path):
     cred = tmp_path / 'cred.json'
     cred.write_text(json.dumps({'ak': 'A', 'sk': 'S', 'region': 'cn-north-4',
         'default_instance': 'i1',
-        'instances': {'i1': {'das_connection_id': 'c1', 'dbname': 'test', 'password': 'p'}}}), encoding='utf-8')
+        'instances': {'i1': {'das_connection_id': 'c1', 'dbname': 'test',
+                             'password': 'p'}}}), encoding='utf-8')
     monkeypatch.setenv('GAUSSDB_DATA_MCP_DRIVER', 'das')
     monkeypatch.setenv('GAUSSDB_DATA_MCP_CREDENTIALS_FILE', str(cred))
     from mcp_server_gaussdb_data.tools import connection as conn_tools
-    s = DataMcpSettings.from_env()
     # 模拟查询结果
     class _Cur:
         def execute(self, q, p=None): pass
@@ -251,7 +260,8 @@ def test_ensure_connection_dedup_then_register(tmp_path, monkeypatch):
     cred = tmp_path / 'cred.json'
     cred.write_text(_json.dumps({'ak': 'A', 'sk': 'S', 'region': 'cn-north-4',
         'default_instance': 'i1',
-        'instances': {'i1': {'dbname': 'test', 'user': 'root', 'password': 'p'}}}), encoding='utf-8')
+        'instances': {'i1': {'dbname': 'test', 'user': 'root',
+                             'password': 'p'}}}), encoding='utf-8')
     monkeypatch.setenv('GAUSSDB_DATA_MCP_DRIVER', 'das')
     monkeypatch.setenv('GAUSSDB_DATA_MCP_CREDENTIALS_FILE', str(cred))
     s = DataMcpSettings.from_env()

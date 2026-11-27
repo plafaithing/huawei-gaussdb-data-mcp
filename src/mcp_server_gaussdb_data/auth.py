@@ -9,6 +9,8 @@
 """
 
 import hmac
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from huaweicloud_mcp_core.errors import McpToolError
 
@@ -18,13 +20,19 @@ from .credentials import load_tokens
 _WWW_AUTH = (b"www-authenticate", b'Bearer realm="gaussdb-data-mcp"')
 _RETRY_AFTER = (b"retry-after", b"5")
 
+# ASGI 三件套（无 starlette 依赖的轻量别名）
+Scope = dict[str, Any]
+Receive = Callable[[], Any]
+Send = Callable[..., Any]
+ASGIApp = Callable[..., Awaitable[None]]
+
 
 class BearerAuthMiddleware:
-    def __init__(self, app, *, tokens_file: str) -> None:
+    def __init__(self, app: ASGIApp, *, tokens_file: str) -> None:
         self.app = app
         self.tokens_file = tokens_file
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return

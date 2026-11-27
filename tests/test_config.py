@@ -6,10 +6,12 @@ from mcp_server_gaussdb_data.config import DataMcpSettings
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for name in ("GAUSSDB_DATA_MCP_READ_ONLY", "GAUSSDB_DATA_MCP_ENABLE_DDL", "GAUSSDB_DATA_MCP_DRIVER",
-                 "MCP_SERVER_HOST", "MCP_SERVER_PORT", "GAUSSDB_DATA_MCP_MAX_ROWS",
-                 "GAUSSDB_DATA_MCP_MAX_CELL_CHARS", "GAUSSDB_DATA_MCP_MAX_SQL_CHARS",
-                 "GAUSSDB_DATA_MCP_DB_SSLMODE"):
+    for name in (
+        "GAUSSDB_DATA_MCP_READ_ONLY", "GAUSSDB_DATA_MCP_ENABLE_DDL", "GAUSSDB_DATA_MCP_DRIVER",
+        "MCP_SERVER_HOST", "MCP_SERVER_PORT", "GAUSSDB_DATA_MCP_MAX_ROWS",
+        "GAUSSDB_DATA_MCP_MAX_CELL_CHARS", "GAUSSDB_DATA_MCP_MAX_SQL_CHARS",
+        "GAUSSDB_DATA_MCP_DB_SSLMODE",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -38,7 +40,7 @@ def test_bad_bool_rejected(monkeypatch):
 
 def test_bad_port_rejected(monkeypatch):
     monkeypatch.setenv("MCP_SERVER_PORT", "70000")
-    with pytest.raises(McpToolError, match="1..65535"):
+    with pytest.raises(McpToolError, match=r"1..65535"):
         DataMcpSettings.from_env()
 
 

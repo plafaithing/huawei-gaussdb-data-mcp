@@ -20,10 +20,11 @@ import json
 import re
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any
 
 import requests
 from huaweicloud_mcp_core.errors import McpToolError
@@ -93,7 +94,8 @@ class _DasHttp:
             self._sk.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256
         ).hexdigest()
         authorization = (
-            f"SDK-HMAC-SHA256 Access={self._ak}, SignedHeaders={signed_headers}, Signature={signature}"
+            f"SDK-HMAC-SHA256 Access={self._ak}, "
+            f"SignedHeaders={signed_headers}, Signature={signature}"
         )
         qs = f"?{canonical_query}" if canonical_query else ""
         resp = requests.request(
@@ -109,7 +111,8 @@ class _DasHttp:
             timeout=_TIMEOUT,
         )
         try:
-            return resp.json()
+            payload: dict[str, Any] = resp.json()
+            return payload
         except ValueError:
             # login-actions 等接口成功时返回 200 空体——非 JSON 不视为错误
             return {"_status": resp.status_code, "_text": resp.text[:200]}
@@ -138,7 +141,7 @@ class DasBackend:
         return 0
 
     @contextmanager
-    def read_connection(self, creds: DbCredentials, *, settings: Any) -> Iterator["DasConnection"]:
+    def read_connection(self, creds: DbCredentials, *, settings: Any) -> Iterator[DasConnection]:
         yield DasConnection(self, creds, settings)
 
     def run_write(self, creds: DbCredentials, *, settings: Any, sql: str) -> int:
@@ -186,7 +189,7 @@ class DasBackend:
                 "GAUSSDB_DATA_MCP_DAS_REGISTER_FAILED",
                 f"DAS register rejected: {json.dumps(resp, ensure_ascii=False)[:300]}",
             )
-        return uid
+        return str(uid)
 
     def _find_db_user(self, creds: DbCredentials, instance_id: str) -> str | None:
         """ListDbUsers 查重（用户 2026-11-09 安全决策）：按 username 匹配已有连接 id。"""
@@ -197,7 +200,8 @@ class DasBackend:
         )
         for u in resp.get("db_users") or []:
             if u.get("db_username") == creds.user:
-                return u.get("db_user_id")
+                matched: str | None = u.get("db_user_id")
+                return matched
         return None
 
     def _ensure_connection(self, creds: DbCredentials, settings: Any) -> DbCredentials:
@@ -210,10 +214,8 @@ class DasBackend:
                 "instance_id/user/password in the instance entry.",
             )
         existing = self._find_db_user(creds, creds.instance_id)
-        if existing:
-            new_id = existing  # 查重命中：直接使用，不重复注册
-        else:
-            new_id = self.register_db_user(creds, creds.instance_id)
+        # 查重命中直接使用（不重复注册：一个数据库用户仅能注册一个连接）
+        new_id = existing or self.register_db_user(creds, creds.instance_id)
         if settings.credentials_file:
             from .credentials import save_das_connection
             save_das_connection(settings.credentials_file, creds.instance_id,
@@ -272,7 +274,9 @@ class DasBackend:
         )
         # 空壳检测：未激活过的连接（或会话失效）会返回 200 空响应（无报错）——
         # login(username-only) 自愈（DAS 用托管密码，零密码输入）后整链重试；5018 同走此路
-        if not (result.get("metadata") or result.get("columnValues") or result.get("executeStatus")):
+        if not (
+            result.get("metadata") or result.get("columnValues") or result.get("executeStatus")
+        ):
             self._relogin(creds, http, conn)
             time.sleep(3)  # L14：错误后立即重试会撞服务端挂起态，退避后再试
             resp = http.post(_EXECUTE_PATH.format(project=self._project(creds), conn=conn), body)
@@ -280,10 +284,12 @@ class DasBackend:
             if not resp.get("success") or not exec_id:
                 raise _die(
                     "GAUSSDB_DATA_MCP_DAS_EXECUTE_FAILED",
-                    f"DAS execute rejected after relogin: {json.dumps(resp, ensure_ascii=False)[:300]}",
+                    f"DAS execute rejected after relogin: "
+                    f"{json.dumps(resp, ensure_ascii=False)[:300]}",
                 )
             result = http.post(
-                _RESULT_PATH.format(project=self._project(creds), conn=conn), {"execute_id": exec_id}
+                _RESULT_PATH.format(project=self._project(creds), conn=conn),
+                {"execute_id": exec_id},
             )
         self._check_sql_error(result)
         if not creds.das_activated and settings.credentials_file:
@@ -352,10 +358,10 @@ class DasConnection:
         self._creds = creds
         self._settings = settings
 
-    def cursor(self) -> "DasCursor":
+    def cursor(self) -> DasCursor:
         return DasCursor(self._backend, self._creds, self._settings)
 
-    def __enter__(self) -> "DasConnection":
+    def __enter__(self) -> DasConnection:
         return self
 
     def __exit__(self, *a: Any) -> None:
@@ -383,16 +389,19 @@ class DasCursor:
         self._creds = creds
         self._settings = settings
         self._columns: list[str] = []
-        self._rows: list[tuple] = []
+        self._rows: list[tuple[Any, ...]] = []
         self.affected_rows = 0
-        self.description: list[tuple] | None = None
+        self.description: list[tuple[Any, ...]] | None = None
 
     def execute(self, sql: str, params: Any = None) -> None:
         if params:
             # 仅 metadata 工具会带参数（schema/table 已过 _IDENTIFIER 白名单）；
             # 内联时仍做转义，双保险。DAS 命名参数化待契约验证后启用。
             for p in params:
-                literal = str(p) if isinstance(p, (int, float)) else "'" + str(p).replace("'", "''") + "'"
+                if isinstance(p, (int, float)):
+                    literal = str(p)
+                else:
+                    literal = "'" + str(p).replace("'", "''") + "'"
                 sql = sql.replace("%s", literal, 1)
         result = self._backend.execute(self._creds, self._settings, sql)
         meta = result.get("metadata") or []
@@ -404,14 +413,14 @@ class DasCursor:
         self.affected_rows = int(result.get("rows") or 0)
         self.description = [(c, None, None, None, None, None, None) for c in self._columns]
 
-    def fetchmany(self, size: int) -> list[tuple]:
+    def fetchmany(self, size: int) -> list[tuple[Any, ...]]:
         out, self._rows = self._rows[:size], self._rows[size:]
         return out
 
-    def fetchone(self) -> tuple | None:
+    def fetchone(self) -> tuple[Any, ...] | None:
         return self._rows.pop(0) if self._rows else None
 
-    def fetchall(self) -> list[tuple]:
+    def fetchall(self) -> list[tuple[Any, ...]]:
         out, self._rows = self._rows, []
         return out
 
@@ -419,7 +428,7 @@ class DasCursor:
         self._rows = []
         self.description = None
 
-    def __enter__(self) -> "DasCursor":
+    def __enter__(self) -> DasCursor:
         return self
 
     def __exit__(self, *a: Any) -> None:

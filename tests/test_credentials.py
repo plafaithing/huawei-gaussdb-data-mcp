@@ -31,7 +31,8 @@ def test_v2_multi_instance_and_alias(tmp_path, monkeypatch):
     f = tmp_path / "credentials.json"
     _write_secret(f, {"ak": "A", "sk": "S", "region": "北京四", "default_instance": "i1",
                       "instances": {
-                          "i1": {"das_connection_id": "c-1", "dbname": "test", "user": "u", "password": "p"},
+                          "i1": {"das_connection_id": "c-1", "dbname": "test",
+                                 "user": "u", "password": "p"},
                           "i2": {"user": "u", "password": "p", "dbname": "db2"}}})
     s = _settings(monkeypatch, f)
     a = DbCredentials.load(s)

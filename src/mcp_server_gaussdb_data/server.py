@@ -8,8 +8,8 @@ server 名带 huaweicloud 前缀），而是直接构造 MCPServer + SqlGuardrai
 
 import argparse
 import logging
-import os
 import sys
+from typing import Any
 
 from huaweicloud_mcp_core.config import McpSettings
 from huaweicloud_mcp_core.errors import McpToolError
@@ -124,7 +124,8 @@ def main() -> None:
 
     # host 传实际监听地址：SDK 据此决定是否启用 localhost DNS rebinding 保护，
     # 非回环监听时若按默认 127.0.0.1 误判会拒绝外部客户端。
-    app = server.streamable_http_app(host=settings.server_host)
+    # app 类型 Any：流式 HTTP app 可能在其外套 BearerAuthMiddleware（ASGI 包装）。
+    app: Any = server.streamable_http_app(host=settings.server_host)
     if settings.tokens_file:
         app = BearerAuthMiddleware(app, tokens_file=settings.tokens_file)
     uvicorn.run(app, host=settings.server_host, port=settings.server_port)

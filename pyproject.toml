@@ -3,7 +3,7 @@ name = "mcp_server_gaussdb_data"
 version = "0.1.0"
 description = "MCP Server for Huawei Cloud GaussDB (data plane: in-database SQL for AI clients)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
     "mcp>=2.0,<3",

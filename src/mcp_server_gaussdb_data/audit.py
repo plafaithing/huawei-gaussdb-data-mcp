@@ -13,7 +13,7 @@ core 把 ``value[:200]`` 硬编码在方法体内，子类预截断后调 ``supe
 import json
 import sys
 from contextvars import ContextVar
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +31,7 @@ class SqlAuditLogger(AuditLogger):
         # 归一两种调用形态：1.1.x 位置传 dict；1.0.0 kwargs 传字段。
         source: dict[str, Any] = args[0] if args else event
         payload: dict[str, Any] = {
-            "ts": datetime.now(UTC).isoformat(),
+            "ts": datetime.now(timezone.utc).isoformat(),
             "event": "tool_call",
             **source,
             "client": client_name.get(),

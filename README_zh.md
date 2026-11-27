@@ -20,9 +20,41 @@ DAS 轨下 MCP 只持 AK/SK（管控面签名）+ 连接 id——数据库密码
 
 ```bash
 uv sync
-uv run gaussdb-data-mcp            # stdio（默认）
-uv run gaussdb-data-mcp -t streamable-http
+uv run mcp_server_gaussdb_data            # stdio（默认）
+uv run mcp_server_gaussdb_data -t streamable-http
 ```
+
+### 2.1 在 AI agent（MCP 客户端）中配置
+
+**stdio**（本地 agent——Claude Code / Claude Desktop / 任何标准 MCP 客户端）。写入客户端的 `mcpServers` 配置：
+
+```json
+{
+  "mcpServers": {
+    "gaussdb-data": {
+      "command": "uv",
+      "args": [
+        "run", "--directory", "/path/to/mcp_server_gaussdb_data",
+        "mcp_server_gaussdb_data"
+      ],
+      "env": {
+        "GAUSSDB_DATA_MCP_DRIVER": "das",
+        "GAUSSDB_DATA_MCP_CREDENTIALS_FILE": "/path/to/credentials.json"
+      }
+    }
+  }
+}
+```
+
+Claude Code 也可用快捷命令：`claude mcp add gaussdb-data -- <上面的启动命令>`。
+
+**streamable-http**（远程 / 共享部署——Dify 等仅 HTTP 的客户端）：按 §8 启动服务后，客户端配置
+
+```json
+{"url": "http://<host>:8000/mcp", "headers": {"Authorization": "Bearer <token>"}}
+```
+
+注意：Dify 仅支持 HTTP 传输——接入 Dify 必须用 streamable-http 形态。首次连上后先用 `gaussdb_is_database_connected` 验证连通、用 `gaussdb_list_user_databases` 选库（§4）。
 
 ## 3. 配置
 
@@ -120,7 +152,7 @@ uv run gaussdb-data-mcp -t streamable-http
 GAUSSDB_DATA_MCP_DRIVER=das \
 GAUSSDB_DATA_MCP_CREDENTIALS_FILE=/path/credentials.json \
 GAUSSDB_DATA_MCP_TOKENS_FILE=/path/tokens.json \
-  uv run gaussdb-data-mcp -t streamable-http
+  uv run mcp_server_gaussdb_data -t streamable-http
 ```
 
 客户端：`{"url": "http://<host>:8000/mcp", "headers": {"Authorization": "Bearer <token>"}}`。审计 JSONL 与 token 轮换细节见 `--help` 与源码内注释。

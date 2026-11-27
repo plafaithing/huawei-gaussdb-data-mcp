@@ -24,6 +24,38 @@ uv run mcp_server_gaussdb_data            # stdio (default)
 uv run mcp_server_gaussdb_data -t streamable-http
 ```
 
+### 2.1 Configure your AI agent (MCP client)
+
+**stdio** (local agent — Claude Code / Claude Desktop / any standard MCP client). Add to the client's `mcpServers` config:
+
+```json
+{
+  "mcpServers": {
+    "gaussdb-data": {
+      "command": "uv",
+      "args": [
+        "run", "--directory", "/path/to/mcp_server_gaussdb_data",
+        "mcp_server_gaussdb_data"
+      ],
+      "env": {
+        "GAUSSDB_DATA_MCP_DRIVER": "das",
+        "GAUSSDB_DATA_MCP_CREDENTIALS_FILE": "/path/to/credentials.json"
+      }
+    }
+  }
+}
+```
+
+Claude Code also accepts the shorthand `claude mcp add gaussdb-data -- <command above>`.
+
+**streamable-http** (remote / shared deployment — Dify and HTTP-only clients): start the server as in §8, then point the client at
+
+```json
+{"url": "http://<host>:8000/mcp", "headers": {"Authorization": "Bearer <token>"}}
+```
+
+Note: Dify supports the HTTP transport only — use the streamable-http form for it. After the first successful connection, verify reachability with `gaussdb_is_database_connected` and pick the database with `gaussdb_list_user_databases` (§4).
+
 ## 3. Configuration
 
 ### 3.1 credentials.json (0600, hot-reloaded)

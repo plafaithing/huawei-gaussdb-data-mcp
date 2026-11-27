@@ -216,7 +216,11 @@ def test_load_tokens_accepts_printable_ascii(tmp_path):
     assert load_tokens(str(f)) == {"dify": "tok_ABC-xyz_123"}
 
 
-def test_core_version_pinned_for_audit_copy():
-    # audit.py 是 core 1.1.1 AuditLogger 的行为副本（query 键截断放宽）。
-    # core 升级使本测试变红 = 强制人工复核 audit.py 与新版 core 的对齐（Task 6 审查 M1）。
-    assert version("huaweicloud-mcp-core") == "1.1.1"
+def test_core_version_within_supported_range():
+    # 依赖范围 >=1.0,<2。audit.py 是 core AuditLogger 的行为副本（query 键截断放宽），
+    # 已双版本兼容：1.0.0（kwargs-emit / 私有 _masking / _error_result）与 1.1.1
+    # （dict-emit / 公开 masking / _error）。本哨兵变红 = 装到了范围外版本（如 2.0），
+    # 强制人工复核 audit.py 副本与 SqlGuardrailsMiddleware 双覆写对新版 core 的对齐。
+    from packaging.version import Version
+
+    assert Version("1.0") <= Version(version("huaweicloud-mcp-core")) < Version("2.0")

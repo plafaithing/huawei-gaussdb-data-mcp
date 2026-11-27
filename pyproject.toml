@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
     "mcp>=2.0,<3",
-    "huaweicloud-mcp-core==1.1.1",
+    "huaweicloud-mcp-core>=1.0,<2",
     "sqlparse>=0.6,<0.7",
 ]
 
@@ -20,9 +20,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_server_gaussdb_data"]
-
-[tool.uv.sources]
-huaweicloud-mcp-core = { path = "wheels/huaweicloud_mcp_core-1.1.1-py3-none-any.whl" }
 
 [dependency-groups]
 dev = [

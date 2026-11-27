@@ -629,8 +629,8 @@ wheels = [
 
 [[package]]
 name = "huaweicloud-mcp-core"
-version = "1.1.1"
-source = { path = "wheels/huaweicloud_mcp_core-1.1.1-py3-none-any.whl" }
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huaweicloudsdkcore" },
     { name = "huaweicloudsdkiam" },
@@ -638,15 +638,7 @@ dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { filename = "huaweicloud_mcp_core-1.1.1-py3-none-any.whl", hash = "sha256:292f4056ca3a74e289d38b9fecf4ae4d0e2098f1305670e4f2ebb8a606ee759e" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "huaweicloudsdkcore", specifier = ">=3.1.216,<4" },
-    { name = "huaweicloudsdkiam", specifier = ">=3.1.216,<4" },
-    { name = "mcp", specifier = ">=2.0,<3" },
-    { name = "pyyaml", specifier = ">=6.0,<7" },
+    { url = "https://files.pythonhosted.org/packages/37/34/d258cb01f789d02775c0b14c1b4a75084d4b811fdea4786b158270cd7d52/huaweicloud_mcp_core-1.0.0-py3-none-any.whl", hash = "sha256:983f0d2055fdd87e9989d2af72a5e89478ade774be21c84a3e29693f9c56fef1", size = 18346, upload-time = "2026-11-18T11:19:52.856Z" },
 ]
 
 [[package]]
@@ -887,7 +879,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "huaweicloud-mcp-core", path = "wheels/huaweicloud_mcp_core-1.1.1-py3-none-any.whl" },
+    { name = "huaweicloud-mcp-core", specifier = ">=1.0,<2" },
     { name = "mcp", specifier = ">=2.0,<3" },
     { name = "sqlparse", specifier = ">=0.6,<0.7" },
 ]
@@ -1809,8 +1801,8 @@ name = "uvicorn"
 version = "0.54.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click" },
-    { name = "h11" },
+    { name = "click", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "h11", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/da/34/30e9280707135d2cfc589dfff3cb796bd07a3aeb1a3e415ba09dd89d7bb4/uvicorn-0.54.0.tar.gz", hash = "sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620", size = 112283, upload-time = "2026-09-25T06:52:37.601Z" }
 wheels = [
